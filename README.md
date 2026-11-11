@@ -81,7 +81,7 @@ With PostgreSQL running, execute the cross-process regression.
 ./mvnw -Ppostgres-integration -Dit.test=DurableWorkerProcessIT verify
 ```
 
-The test seeds planned jobs, starts two independent JVMs against a common HTTP test downstream, kills the first JVM and checks durable recovery, one effect per operation and a measured peak of one active operation. A separate scenario delivers a stale request after the downstream has fenced its attempt.
+The test seeds planned jobs, starts two independent JVMs against a common HTTP test downstream, kills the first JVM and checks durable recovery, one effect per operation and a measured peak of one active operation. Other scenarios verify late-request fencing and cross-firm scheduling. In the scheduling test, two JVMs fill two slots with work from a large firm. A small firm joins and takes the next released slot while 30 large-firm jobs remain ready.
 
 To run a worker against a compatible downstream, first initialize the schema and insert jobs using the planner. Set `FANOUT_DB_URL`, `FANOUT_DB_USER`, `FANOUT_DB_PASSWORD` and `FANOUT_DOWNSTREAM_URL`.
 

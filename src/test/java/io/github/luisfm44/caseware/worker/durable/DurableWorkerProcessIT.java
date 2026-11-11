@@ -36,6 +36,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.IntStream;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -152,6 +153,43 @@ class DurableWorkerProcessIT {
         }
     }
 
+    @Test
+    void aLateSmallFirmStartsAtTheNextFreeSlotWhileTheLargeFirmIsBacklogged() throws Exception {
+        var moreLargeJobs = IntStream.range(0, 30)
+                .mapToObj(index -> new Engagement("large-engagement-" + index, "revision-1"))
+                .toList();
+        plan(database, new Publication(PUBLICATION.firmId(), "bulk-publication"), moreLargeJobs);
+        var smallPublication = new Publication("firm-small", "small-publication");
+        var small = new OperationId(smallPublication.firmId(), "small-engagement",
+                smallPublication.publicationId(), "revision-1");
+
+        try (var manager = new RecordingManager(FirstRequest.HOLD_ALL_REPLIES);
+                var first = startWorker(manager.url(), "first", 2, 60_000);
+                var second = startWorker(manager.url(), "second", 2, 60_000)) {
+            assertThat(first.process().pid()).isNotEqualTo(second.process().pid());
+            eventually(second, () -> assertThat(manager.active()).isEqualTo(2));
+            var initiallyActive = manager.submissions();
+            assertThat(initiallyActive).hasSize(2)
+                    .allSatisfy(attempt -> assertThat(attempt.operation().firmId()).isEqualTo(PUBLICATION.firmId()));
+
+            plan(database, smallPublication, List.of(new Engagement(small.engagementId(), small.engagementRevision())));
+            manager.completeAndReply(initiallyActive.getFirst());
+
+            eventually(second, () -> assertThat(manager.submissions()).hasSize(3));
+            var next = manager.submissions().get(2);
+            assertThat(next.operation()).as("operation started at the first available slot").isEqualTo(small);
+            assertThat(manager.active()).isEqualTo(2);
+            assertThat(manager.effects()).containsOnlyKeys(initiallyActive.getFirst().operation());
+            assertThat(executions(database).values()).filteredOn(execution -> execution.state().equals("READY"))
+                    .hasSize(moreLargeJobs.size());
+
+            manager.completeAndReply(next);
+            eventually(second, () -> assertThat(manager.submissions()).hasSize(4));
+            assertThat(manager.submissions().get(3).operation().firmId()).isEqualTo(PUBLICATION.firmId());
+            assertThat(manager.peak()).isEqualTo(2);
+        }
+    }
+
     private void expectSuccessfulJobs(WorkerProcess worker, RecordingManager manager, int firstSubmissions)
             throws IOException {
         eventually(worker, () -> assertThat(executions(database)).containsExactlyInAnyOrderEntriesOf(
@@ -163,15 +201,22 @@ class DurableWorkerProcessIT {
     }
 
     private static void seedJobs(PGSimpleDataSource database) {
-        var store = new PostgresFanoutStore(database);
-        var engagements = List.of(
+        plan(database, PUBLICATION, List.of(
                 new Engagement(FIRST.engagementId(), FIRST.engagementRevision()),
-                new Engagement(NEXT.engagementId(), NEXT.engagementRevision()));
-        new PublicationFanout((publication, cursor, limit) -> new Page(engagements, null),
-                store, engagements.size()).plan(PUBLICATION);
+                new Engagement(NEXT.engagementId(), NEXT.engagementRevision())));
+    }
+
+    private static void plan(PGSimpleDataSource database, Publication publication, List<Engagement> engagements) {
+        var store = new PostgresFanoutStore(database);
+        new PublicationFanout((requested, cursor, limit) -> new Page(engagements, null),
+                store, engagements.size()).plan(publication);
     }
 
     private WorkerProcess startWorker(String managerUrl, String name) throws IOException {
+        return startWorker(managerUrl, name, 1, 1_200);
+    }
+
+    private WorkerProcess startWorker(String managerUrl, String name, int capacity, int leaseMillis) throws IOException {
         var command = new ArrayList<String>();
         command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
         // With the coverage profile, graceful shutdown of the survivor records the code
@@ -183,7 +228,7 @@ class DurableWorkerProcessIT {
                 System.getProperty("surefire.test.class.path", System.getProperty("java.class.path")),
                 TemplateFanoutWorkerApplication.class.getName(),
                 "--spring.profiles.active=postgres-worker", "--spring.main.banner-mode=off",
-                "--worker.capacity=1", "--worker.lease-ms=1200", "--worker.idle-ms=25",
+                "--worker.capacity=" + capacity, "--worker.lease-ms=" + leaseMillis, "--worker.idle-ms=25",
                 "--worker.http-timeout-ms=30000"));
         var output = logs.resolve(name + ".log");
         var builder = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(output.toFile());
@@ -241,7 +286,7 @@ class DurableWorkerProcessIT {
 
     private record Attempt(OperationId operation, UUID id) {}
 
-    private enum FirstRequest { IMMEDIATE, HOLD_REPLY, HOLD_BEFORE_ADMISSION }
+    private enum FirstRequest { IMMEDIATE, HOLD_REPLY, HOLD_BEFORE_ADMISSION, HOLD_ALL_REPLIES }
 
     private record WorkerProcess(Process process, Path log) implements AutoCloseable {
 
@@ -272,6 +317,7 @@ class DurableWorkerProcessIT {
         private final List<Attempt> resolutions = new ArrayList<>();
         private final Map<OperationId, Integer> effects = new HashMap<>();
         private final Map<String, String> currentRevisions = new HashMap<>();
+        private final Map<Attempt, CountDownLatch> heldReplies = new HashMap<>();
         private final Set<Attempt> active = new HashSet<>();
         private final Set<Attempt> fenced = new HashSet<>();
         private final Set<Attempt> rejectedLate = new HashSet<>();
@@ -301,8 +347,13 @@ class DurableWorkerProcessIT {
                 }
                 var outcome = start(attempt);
                 if ("PENDING".equals(outcome)) {
-                    // Wait without replying until the test kills the original process.
-                    awaitLatch(dropFirstReply);
+                    if (firstRequest == FirstRequest.HOLD_ALL_REPLIES) {
+                        awaitLatch(heldReply(attempt));
+                        reply(exchange, 200, "APPLIED");
+                    } else {
+                        // Wait without replying until the test kills the original process.
+                        awaitLatch(dropFirstReply);
+                    }
                 } else {
                     reply(exchange, 200, outcome);
                 }
@@ -325,6 +376,10 @@ class DurableWorkerProcessIT {
             }
             active.add(attempt);
             peak = Math.max(peak, active.size());
+            if (firstRequest == FirstRequest.HOLD_ALL_REPLIES) {
+                heldReplies.put(attempt, new CountDownLatch(1));
+                return "PENDING";
+            }
             if (firstRequest == FirstRequest.HOLD_REPLY && FIRST.equals(attempt.operation())) {
                 return "PENDING";
             }
@@ -401,6 +456,16 @@ class DurableWorkerProcessIT {
             statusAvailable = available;
         }
 
+        private synchronized CountDownLatch heldReply(Attempt attempt) {
+            return heldReplies.get(attempt);
+        }
+
+        synchronized void completeAndReply(Attempt attempt) {
+            assertThat(active).contains(attempt);
+            apply(attempt);
+            heldReplies.get(attempt).countDown();
+        }
+
         synchronized void applyFirstAndDropReply(Attempt attempt) {
             assertThat(active).containsExactly(attempt);
             apply(attempt);
@@ -457,6 +522,9 @@ class DurableWorkerProcessIT {
         public void close() {
             dropFirstReply.countDown();
             deliverDelayedRequest.countDown();
+            synchronized (this) {
+                heldReplies.values().forEach(CountDownLatch::countDown);
+            }
             server.stop(0);
             executor.close();
         }

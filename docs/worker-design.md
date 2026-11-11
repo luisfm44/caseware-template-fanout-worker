@@ -32,14 +32,22 @@ The simulator holds submissions under test control so the demo can measure overl
 
 Issues [#15](https://github.com/luisfm44/caseware-template-fanout-worker/issues/15), [#16](https://github.com/luisfm44/caseware-template-fanout-worker/issues/16) and [#17](https://github.com/luisfm44/caseware-template-fanout-worker/issues/17).
 
-- The `postgres-worker` profile claims one eligible job per JVM using `FOR UPDATE SKIP LOCKED`. The claim expires independently of downstream capacity. Each write checks the current claim token. A new claimant reconciles a recorded attempt before it can send again.
-- A PostgreSQL capacity row serializes admissions for the schema. Authorizing a send increments the durable submission count and reserves one slot with a new attempt ID in the same transaction. This counts authorizations even when the process dies before sending. Three authorizations are allowed per job. Status queries have their own bounded backoff.
+- The `postgres-worker` profile processes one attempt at a time per JVM. It reclaims due attempts using `FOR UPDATE SKIP LOCKED`. The claim expires independently of downstream capacity. Each write checks the current claim token. A new claimant reconciles a recorded attempt before it can send again.
+- A PostgreSQL capacity row serializes admissions for the schema. The transaction that claims fresh work also reserves the slot, records a new attempt ID and increments the durable submission count. This counts authorizations even when the process dies before sending. Three authorizations are allowed per job. Status queries have their own bounded backoff.
 - An attempt reserves a slot until the downstream confirms success, rejection or definitive no effect. One SQL update records the confirmed result and clears the reservation. A confirmed no-effect outcome releases the slot and schedules a new attempt if budget remains.
 - Track unresolved work from `fanout_job.authorized_at`. An alert can use `SELECT max(clock_timestamp() - authorized_at) FROM fanout_job WHERE attempt_id IS NOT NULL`. The elapsed time measures uncertainty and does not determine when a slot is safe to release.
 
 The HTTP adapter uses `POST /submit` and `POST /resolve` at the configured downstream origin. Both carry URL-encoded form fields `firmId`, `engagementId`, `publicationId`, `engagementRevision` and `attemptId`. A successful HTTP response has a plain-text outcome of `APPLIED`, `REJECTED`, `NOT_APPLIED` or `PENDING`, with optional `Retry-After` in seconds. Errors and unusable responses leave the outcome uncertain. The engagement manager owns durable idempotency by operation ID and validates the expected revision. A `NOT_APPLIED` response certifies that the attempt had no effect and is fenced against late execution. An absent record alone provides insufficient evidence.
 
 The [process integration test](../src/test/java/io/github/luisfm44/caseware/worker/durable/DurableWorkerProcessIT.java) uses a shared HTTP test downstream. The regional deployment needs a compatible engagement manager to enforce these guarantees and own the real capacity pool. [Regional architecture](system-architecture.md)
+
+## Scheduling across firms
+
+Issue [#18](https://github.com/luisfm44/caseware-template-fanout-worker/issues/18). Each new reservation advances a shared cursor to the admitted firm in the PostgreSQL capacity row. With a slot available, the scheduler selects the next firm with eligible work in firm ID order, wrapping to the beginning as needed. It selects the oldest eligible job within that firm across its publications. Selection, reservation and cursor advancement commit together. This prevents a worker from claiming a fresh large-firm job ahead of capacity and then bypassing the next firm's turn.
+
+With a fixed set of continuously eligible firms, each receives a reservation within one rotation. Two eligible firms alternate when both have ready work. A sole eligible firm can use all available capacity. Deferred retries participate when they become due. Reconciliation keeps the existing reservation and leaves the cursor in place. The guarantee is expressed in new reservations when slots become available. Independent HTTP calls can reach the downstream in a different order when several slots open together.
+
+The [two-JVM integration test](../src/test/java/io/github/luisfm44/caseware/worker/durable/DurableWorkerProcessIT.java) fills a two-slot pool with large-firm work, adds a small firm and releases one slot. It checks that the next downstream start belongs to the small firm with 30 large-firm jobs still ready. It then verifies that the large firm resumes and that the measured peak stays at two. Apply the worker version to all replicas sharing the schema before relying on the rotation across the pool.
 
 ## Code quality · Issue [#8][issue-8]
 

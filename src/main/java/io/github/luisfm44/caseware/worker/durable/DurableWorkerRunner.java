@@ -63,7 +63,7 @@ final class DurableWorkerRunner implements ApplicationRunner {
             try {
                 var claim = jobs.claimReady();
                 if (claim.isPresent()) {
-                    process(jobs, transport, claim.get(), idleDelay);
+                    process(jobs, transport, claim.get());
                 } else {
                     Thread.sleep(idleDelay);
                 }
@@ -73,18 +73,13 @@ final class DurableWorkerRunner implements ApplicationRunner {
         }
     }
 
-    static void process(PostgresJobQueue jobs, AttemptTransport transport, Claim claim, Duration idleDelay)
+    static void process(PostgresJobQueue jobs, AttemptTransport transport, Claim claim)
             throws InterruptedException {
-        boolean recovering = claim.attemptId() != null;
-        var attempt = recovering ? claim.attemptId() : jobs.authorizeSubmission(claim).orElse(null);
-        if (attempt == null) {
-            jobs.defer(claim, idleDelay);
-            return;
-        }
+        var attempt = claim.attemptId();
 
         AttemptTransport.Reply reply;
         try {
-            reply = recovering
+            reply = claim.reconciling()
                     ? transport.resolve(claim.operationId(), attempt)
                     : transport.submit(claim.operationId(), attempt);
         } catch (IOException unavailable) {
@@ -98,8 +93,7 @@ final class DurableWorkerRunner implements ApplicationRunner {
         if (reply.outcome() == Outcome.PENDING) {
             jobs.defer(claim, delay(claim.pollCount(), reply.retryAfter()));
         } else {
-            int previousSubmissions = recovering ? claim.submissions() - 1 : claim.submissions();
-            jobs.settle(claim, attempt, reply.outcome(), delay(previousSubmissions, reply.retryAfter()));
+            jobs.settle(claim, attempt, reply.outcome(), delay(claim.submissions() - 1, reply.retryAfter()));
         }
     }
 
