@@ -22,7 +22,7 @@ Once the worker and tests are present, run `./mvnw -DfailIfNoTests=true verify`.
 
 ## Implementation checkpoints
 
-1. Two workers share admission to the downstream service. Instrument the fake service to count peak simultaneous calls.
-2. Page through engagements and resume the fan-out after a crash. Replaying a publication preserves job identity.
-3. Lose the response after a successful downstream effect. Retry with the same operation key or reconcile the recorded outcome.
-4. Verify the executable artifact and record implementation tradeoffs and the actual use of AI in this README.
+1. [Two workers share admission to the downstream service](https://github.com/luisfm44/caseware-template-fanout-worker/issues/1). Instrument the fake service to count peak simultaneous calls.
+2. [Page through engagements and resume the fan-out after a crash](https://github.com/luisfm44/caseware-template-fanout-worker/issues/2). Replaying a publication preserves job identity.
+3. [Lose the response after a successful downstream effect](https://github.com/luisfm44/caseware-template-fanout-worker/issues/3). Retry with the same operation key or reconcile the recorded outcome.
+4. [Verify the executable artifact and record implementation tradeoffs and the actual use of AI in this README](https://github.com/luisfm44/caseware-template-fanout-worker/issues/4).
