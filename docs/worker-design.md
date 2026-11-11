@@ -1,0 +1,39 @@
+# Worker design decisions
+
+The repository implements the worker contracts for admission, durable planning, and downstream recovery. The [system design and implementation appendix](architecture.pdf) place these contracts within the wider Caseware proposal. The [worker architecture](worker-architecture.md) traces the code paths and their boundaries.
+
+## Shared admission · Issue [#1][issue-1]
+
+Two logical workers acquire permits from one in-memory semaphore. A caller can time out or cancel its own future while the worker retains the permit until the downstream reaches a confirmed terminal state. A full pool returns immediately so the caller can decide when to try again. The tests verify a peak of three operations across both workers and prove that a caller timeout leaves the occupied slot reserved. [Shared admission tests][admission-test]
+
+The semaphore coordinates workers in a single JVM. Separate worker processes would need a shared admission authority. The three-slot test configuration demonstrates the invariant with a small workload.
+
+## Durable planning · Issue [#2][issue-2]
+
+The planner converts each bounded page of eligible engagements into jobs keyed by `OperationId`, which combines firm, engagement, publication, and engagement revision. PostgreSQL commits the page's jobs and checkpoint together. A checkpoint comparison rejects a stale writer, and the job key makes page replay safe. The engagement source must preserve membership, revision, order, and cursor meaning for the life of a publication. [PostgreSQL integration tests][planning-test]
+
+A fresh planner resumes from the last committed cursor after interruption. The transaction boundary covers planning data. The deployment still needs a consumer to claim persisted jobs and pass their operation IDs to the execution path.
+
+## Downstream reconciliation · Issue [#3][issue-3]
+
+The retrying client carries the same operation ID through every submission and status lookup. After a lost reply, confirmed success completes the original execution. A new submission requires confirmation that the previous one had no effect and can no longer run. The client returns a typed failure after a permanent rejection or when the last allowed submission is confirmed to have no effect. [Retry and reconciliation tests][retry-test]
+
+The three-submission budget applies to one worker execution and is held in memory. The worker retains its permit during backoff and unresolved reconciliation, which can reduce throughput when status is unavailable. A live downstream adapter must enforce idempotency and supply authoritative status. The current tests use a controlled transport that can record an effect, lose the reply, and confirm that only one effect occurred.
+
+## Deployment and follow-up
+
+The Spring Boot entry point starts the application. The test suites assemble the planning and execution paths independently. A running deployment will need job consumption, a live downstream adapter, and shared admission for multiple worker processes. The broader proposal also covers regional ownership and data residency. [System design](architecture.pdf)
+
+The open follow-ups cover the [executable demo and reviewer handoff][issue-4], [SonarQube quality checks][issue-8], and the [GitHub Wiki][issue-9].
+
+When an issue changes a contract, component boundary, or verification step, update the affected design decision and architecture section in the same pull request. Link the issue and the test or workflow that demonstrates the change. Update the system design appendix when the change affects the relationship between the implementation and the proposed deployment.
+
+[issue-1]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/1
+[issue-2]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/2
+[issue-3]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/3
+[issue-4]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/4
+[issue-8]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/8
+[issue-9]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/9
+[admission-test]: ../src/test/java/io/github/luisfm44/caseware/worker/SharedAdmissionTest.java
+[planning-test]: ../src/test/java/io/github/luisfm44/caseware/worker/planning/PublicationFanoutIT.java
+[retry-test]: ../src/test/java/io/github/luisfm44/caseware/worker/retry/RetryingDownstreamClientTest.java

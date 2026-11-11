@@ -1,6 +1,6 @@
 # Worker architecture
 
-The first checkpoint exercises two logical workers in one Java 25 process. Both workers share a single admission controller and a simulated downstream. The test configures three slots for the entire pool.
+The implementation has a planning path and an execution path. Both use `OperationId` for the same engagement work. Planning records the jobs in PostgreSQL. Execution starts when a caller supplies a job's ID to the worker.
 
 ```mermaid
 ---
@@ -8,28 +8,48 @@ config:
   theme: neutral
   htmlLabels: false
   flowchart:
-    rankSpacing: 35
-    wrappingWidth: 250
+    rankSpacing: 32
+    nodeSpacing: 28
+    wrappingWidth: 240
 ---
 flowchart TB
-    accTitle: Shared admission for the Caseware worker
-    accDescr: Two logical workers use the same pool of three slots and the same simulated downstream. Each worker reserves a slot before dispatch and releases its permit after a terminal outcome.
-    TEST["SharedAdmissionTest<br/>Submits operation IDs"]
-    WORKERS["Workers A and B<br/>Two FanoutWorker instances"]
-    ADMISSION["AdmissionController<br/>Shared semaphore · 3 slots"]
-    DOWNSTREAM["FakeDownstreamClient<br/>One shared test double"]
+    accTitle: Caseware worker architecture
+    accDescr: Publication planning records operation IDs and checkpoints in PostgreSQL. Separately, a caller supplies an operation ID to a worker that acquires a permit and submits or reconciles that operation through the downstream transport.
 
-    TEST -->|"tryStart"| WORKERS
-    WORKERS <-->|"Acquire or close permit"| ADMISSION
-    WORKERS <-->|"Dispatch and confirm end"| DOWNSTREAM
+    KEY["OperationId<br/>Shared job and execution identity"]
 
-    classDef test fill:#f6f8fa,stroke:#8c959f,color:#24292f
-    classDef worker fill:#ddf4ff,stroke:#218bff,color:#24292f
-    classDef shared fill:#e6ffec,stroke:#2da44e,color:#24292f
-    class TEST test
-    class WORKERS worker
-    class ADMISSION,DOWNSTREAM shared
+    subgraph PLAN["Publication planning"]
+        direction TB
+        PLANNER["PublicationFanout"]
+        SOURCE["EngagementSource<br/>Eligible pages"]
+        DB[("PostgreSQL<br/>Jobs and checkpoint")]
+        PLANNER -->|"Read page"| SOURCE
+        PLANNER -->|"Commit page"| DB
+    end
+
+    subgraph EXEC["Worker execution"]
+        direction TB
+        WORKER["FanoutWorker"]
+        ADMISSION["AdmissionController<br/>Shared within one JVM"]
+        RETRY["RetryingDownstreamClient"]
+        TRANSPORT["DownstreamTransport<br/>Simulated in tests"]
+        WORKER -->|"Reserve slot"| ADMISSION
+        WORKER -->|"Start operation"| RETRY
+        RETRY -->|"Submit or reconcile"| TRANSPORT
+    end
+
+    KEY -.->|"Job key"| PLAN
+    KEY -.->|"Caller supplies ID"| EXEC
+
+    classDef identity fill:#f6f8fa,stroke:#8c959f,color:#24292f
+    classDef planning fill:#e6ffec,stroke:#2da44e,color:#24292f
+    classDef execution fill:#ddf4ff,stroke:#218bff,color:#24292f
+    class KEY identity
+    class PLANNER,SOURCE,DB planning
+    class WORKER,ADMISSION,RETRY,TRANSPORT execution
 ```
+
+The dotted lines show where the identity is used. The Spring Boot entry point starts the application, and the tests assemble the planning and execution paths directly. Automatic consumption of PostgreSQL jobs and a production transport adapter are integration work.
 
 ## Components
 
@@ -42,7 +62,10 @@ flowchart TB
 | [`DownstreamClient`][downstream] | Dispatches an admitted operation and returns a `CompletionStage`. Success or failure on that stage means the downstream confirmed that execution ended or never started. |
 | [`FakeDownstreamClient`][fake] | Test implementation that keeps operations active until the test finishes them explicitly. It records both the current and peak number of active operations. |
 | [`SharedAdmissionTest`][test] | Creates two workers with the same dependencies, makes them compete for the last slot and verifies that the peak is three. It also verifies slot retention after a caller timeout. |
-| [`TemplateFanoutWorkerApplication`][boot] | Starts Spring Boot 4.1.2. The test constructs the two-worker setup directly. |
+| [`PublicationFanout`][planner] and [`EngagementSource`][source] | Read bounded, stable pages of eligible engagements and produce job IDs. |
+| [`PostgresFanoutStore`][store] | Persists each page's jobs and checkpoint in one transaction. |
+| [`RetryingDownstreamClient`][retry] and [`DownstreamTransport`][transport] | Apply the retry policy and submit or reconcile a downstream operation by ID. |
+| [`TemplateFanoutWorkerApplication`][boot] | Starts Spring Boot 4.1.2. Tests construct the planner and workers directly. |
 
 ## Operation lifecycle
 
@@ -82,6 +105,14 @@ Each execution allows three submissions, including the initial attempt. A confir
 
 The transport must supply authoritative status and use the operation ID as its idempotency key. The controlled test transport records applied effects and can lose a reply after recording an effect. The worker then reconciles by ID, and the test verifies one submission and one effect. The retry counter is scoped to a worker execution.
 
+## Verification
+
+- [`SharedAdmissionTest`][test] measures the downstream concurrency peak and verifies permit retention after a caller timeout.
+- [`PublicationFanoutIT`][planning-test] runs against PostgreSQL and checks resume, replay, rollback and stale checkpoints.
+- [`RetryingDownstreamClientTest`][retry-test] checks the single-effect recovery, bounded retries and rejection paths with controlled responses.
+
+See the [worker design decisions](worker-design.md) for the rationale and how the current implementation maps to the system proposal.
+
 [operation]: ../src/main/java/io/github/luisfm44/caseware/worker/OperationId.java
 [worker]: ../src/main/java/io/github/luisfm44/caseware/worker/FanoutWorker.java
 [admission]: ../src/main/java/io/github/luisfm44/caseware/worker/AdmissionController.java
@@ -97,3 +128,5 @@ The transport must supply authoritative status and use the operation ID as its i
 [retry]: ../src/main/java/io/github/luisfm44/caseware/worker/retry/RetryingDownstreamClient.java
 [transport]: ../src/main/java/io/github/luisfm44/caseware/worker/retry/DownstreamTransport.java
 [failure]: ../src/main/java/io/github/luisfm44/caseware/worker/retry/DownstreamFailure.java
+[planning-test]: ../src/test/java/io/github/luisfm44/caseware/worker/planning/PublicationFanoutIT.java
+[retry-test]: ../src/test/java/io/github/luisfm44/caseware/worker/retry/RetryingDownstreamClientTest.java
