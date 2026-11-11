@@ -120,7 +120,7 @@ The transport must supply authoritative status and use the operation ID as its i
 - [`PublicationFanoutIT`][planning-test] runs against PostgreSQL and checks resume, replay, rollback and stale checkpoints.
 - [`RetryingDownstreamClientTest`][retry-test] checks the single-effect recovery, bounded retries and rejection paths with controlled responses.
 - The [manual demo workflow](../.github/workflows/demo.yml) builds and runs the packaged JAR against PostgreSQL, checks the report and uploads it as a workflow artifact.
-- The [SonarQube quality job](code-quality.md) analyzes the Java code and imports combined coverage from the unit and PostgreSQL suites. GitHub Actions publishes the Quality Gate decision and JaCoCo report on pushes to `main` and on manual runs.
+- The [SonarQube quality job](code-quality.md) verifies zero missed JaCoCo lines and branches, imports the combined unit and PostgreSQL coverage, and enforces the 100% overall gate. GitHub Actions publishes both reports on pushes to `main` and on manual runs.
 
 See the [worker design decisions](worker-design.md) for the rationale and how the current implementation maps to the system proposal.
 

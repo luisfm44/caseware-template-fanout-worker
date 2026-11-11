@@ -58,7 +58,7 @@ The demo measures shared capacity within one JVM. PostgreSQL makes planning dura
 ## GitHub Actions
 
 - **Verify and scan** runs on pull requests, pushes to main, or manual dispatch. The `verify` job runs the unit and PostgreSQL integration tests, packages the executable JAR, and uploads both sets of test reports. The `security` job scans dependencies and tracked sources with Trivy. High or critical findings fail the scan.
-- **SonarQube quality** runs on pushes to `main` and on manual dispatch within **Verify and scan**. It combines unit and PostgreSQL test coverage with JaCoCo, enforces the SonarQube Quality Gate and publishes the reports. [Run and inspect code quality checks](docs/code-quality.md)
+- **SonarQube quality** runs on pushes to `main` and on manual dispatch within **Verify and scan**. It combines unit and PostgreSQL test coverage, requires full JaCoCo line and branch coverage and enforces a 100% overall SonarQube Quality Gate. [Run and inspect code quality checks](docs/code-quality.md)
 - **Run local deployment demo** is a manual smoke workflow on an isolated runner. It starts a PostgreSQL service, builds the JAR and launches the demo profile. The workflow checks the report for successful completion, single effects, shared capacity, resumed planning and reconciliation, then uploads the JSON report as an artifact. [Demo workflow](.github/workflows/demo.yml)
 
 ## AI assistance and human judgment
@@ -77,4 +77,5 @@ Production decisions still require human judgment. These include choosing who ow
 ### Follow-up issues
 
 - [SonarQube code quality analysis and reproduction](docs/code-quality.md) · [Issue #8](https://github.com/luisfm44/caseware-template-fanout-worker/issues/8)
+- [Full Java test coverage](https://github.com/luisfm44/caseware-template-fanout-worker/issues/12)
 - [GitHub Wiki for contributors and reviewers](https://github.com/luisfm44/caseware-template-fanout-worker/issues/9)

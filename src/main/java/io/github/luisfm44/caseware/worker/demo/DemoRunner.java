@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 import javax.sql.DataSource;
 
+import io.github.luisfm44.caseware.worker.AdmissionController;
 import io.github.luisfm44.caseware.worker.FanoutWorker;
 import io.github.luisfm44.caseware.worker.InMemoryAdmissionController;
 import io.github.luisfm44.caseware.worker.OperationId;
@@ -40,6 +41,9 @@ final class DemoRunner implements ApplicationRunner {
     private static final int ENGAGEMENT_COUNT = 7;
     private static final int PAGE_SIZE = 2;
     private static final int CAPACITY = 3;
+    private static final int PLANNED_PAGES = Math.ceilDiv(ENGAGEMENT_COUNT, PAGE_SIZE);
+    private static final Report EXPECTED_REPORT = new Report(ENGAGEMENT_COUNT, ENGAGEMENT_COUNT, 0, CAPACITY,
+            CAPACITY, PLANNED_PAGES, ENGAGEMENT_COUNT, ENGAGEMENT_COUNT, 1);
 
     private final Environment environment;
 
@@ -86,44 +90,51 @@ final class DemoRunner implements ApplicationRunner {
         };
 
         var store = new PostgresFanoutStore(dataSource);
-        var initial = new PublicationFanout(source, store, PAGE_SIZE);
-        if (!initial.planNextPage(PUBLICATION)) {
-            throw new IllegalStateException("Expected to commit the first demo page");
-        }
+        new PublicationFanout(source, store, PAGE_SIZE).planNextPage(PUBLICATION);
 
         var resumedStore = new PostgresFanoutStore(dataSource);
-        var firstCheckpoint = new Checkpoint(1, Integer.toString(PAGE_SIZE), false);
-        if (!resumedStore.checkpoint(PUBLICATION).equals(firstCheckpoint)) {
-            throw new IllegalStateException("The first page checkpoint was not persisted");
-        }
+        verifyCheckpoint(resumedStore.checkpoint(PUBLICATION), new Checkpoint(1, Integer.toString(PAGE_SIZE), false));
         new PublicationFanout(source, resumedStore, PAGE_SIZE).plan(PUBLICATION);
         var checkpoint = resumedStore.checkpoint(PUBLICATION);
+        verifyCheckpoint(checkpoint, new Checkpoint(PLANNED_PAGES, null, true));
 
         var jobs = resumedStore.listJobs(PUBLICATION, ENGAGEMENT_COUNT + 1);
         var expected = engagements.stream()
                 .map(engagement -> new OperationId(PUBLICATION.firmId(), engagement.engagementId(),
                         PUBLICATION.publicationId(), engagement.engagementRevision()))
                 .toList();
-        if (!checkpoint.complete() || checkpoint.pagesCommitted() != Math.ceilDiv(ENGAGEMENT_COUNT, PAGE_SIZE)
-                || jobs.size() != ENGAGEMENT_COUNT || !new HashSet<>(jobs).equals(new HashSet<>(expected))) {
-            throw new IllegalStateException("Planning did not persist the expected demo pages and jobs");
-        }
+        verifyJobs(jobs, expected);
 
         var downstream = new SimulatedDownstream(jobs.getFirst());
-        int completed = executeJobs(jobs, downstream);
+        int completed = executeJobs(jobs, downstream, new InMemoryAdmissionController(CAPACITY));
         var report = new Report(jobs.size(), completed, downstream.duplicateEffects(), CAPACITY,
                 downstream.peakInFlight(), checkpoint.pagesCommitted(), downstream.appliedEffects(),
                 downstream.dispatchAttempts(), downstream.reconciliations());
-        if (report.completed() != report.submitted() || report.duplicateEffects() != 0
-                || report.peakInFlight() != CAPACITY || report.appliedEffects() != report.submitted()
-                || report.dispatchAttempts() != report.submitted() || report.reconciliations() != 1) {
-            throw new IllegalStateException("The demo violated an execution invariant: " + report.json());
-        }
+        verifyReport(report);
         return report;
     }
 
-    private static int executeJobs(List<OperationId> jobs, SimulatedDownstream downstream) throws Exception {
-        var admission = new InMemoryAdmissionController(CAPACITY);
+    static void verifyCheckpoint(Checkpoint actual, Checkpoint expected) {
+        if (!actual.equals(expected)) {
+            throw new IllegalStateException("Expected demo checkpoint " + expected + " but found " + actual);
+        }
+    }
+
+    static void verifyJobs(List<OperationId> actual, List<OperationId> expected) {
+        if (actual.size() != expected.size() || !new HashSet<>(actual).equals(new HashSet<>(expected))) {
+            throw new IllegalStateException("Expected demo jobs " + expected + " but found " + actual);
+        }
+    }
+
+    static void verifyReport(Report actual) {
+        if (!actual.equals(EXPECTED_REPORT)) {
+            throw new IllegalStateException(
+                    "Expected demo report " + EXPECTED_REPORT.json() + " but found " + actual.json());
+        }
+    }
+
+    static int executeJobs(List<OperationId> jobs, SimulatedDownstream downstream, AdmissionController admission)
+            throws Exception {
         var client = new RetryingDownstreamClient(downstream);
         var workers = List.of(new FanoutWorker(admission, client), new FanoutWorker(admission, client));
         var batch = new ArrayList<CompletableFuture<Void>>();
@@ -162,7 +173,7 @@ final class DemoRunner implements ApplicationRunner {
         }
     }
 
-    private record Report(int submitted, int completed, int duplicateEffects, int limit, int peakInFlight,
+    record Report(int submitted, int completed, int duplicateEffects, int limit, int peakInFlight,
             long plannedPages, int appliedEffects, int dispatchAttempts, int reconciliations) {
 
         String json() {

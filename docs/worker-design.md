@@ -36,6 +36,8 @@ The demo reads the jobs for one publication and dispatches them in one process. 
 
 JaCoCo combines coverage from the unit and PostgreSQL integration suites. SonarQube Community Build enforces the overall coverage floor on `main` and supports isolated manual verification. The default runner-local instance publishes the gate, metrics and findings as artifacts. An existing SonarQube instance can provide historical analysis through a configured project token. [Quality workflow and reproduction](code-quality.md)
 
+[Issue #12][issue-12] sets the floor at 100% and checks line and branch coverage independently in Maven. Tests exercise worker validation, retry and reconciliation paths, real PostgreSQL transactions and the demo. The isolated negative probe uses unit-only execution data to verify that SonarQube rejects a drop in coverage.
+
 The [GitHub Wiki][issue-9] remains a follow-up for reviewer and contributor navigation.
 
 When an issue changes a contract, component boundary, or verification step, update the affected design decision and architecture section in the same pull request. Link the issue and the test or workflow that demonstrates the change. Update the system design appendix when the change affects the relationship between the implementation and the proposed deployment.
@@ -46,6 +48,7 @@ When an issue changes a contract, component boundary, or verification step, upda
 [issue-4]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/4
 [issue-8]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/8
 [issue-9]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/9
+[issue-12]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/12
 [admission-test]: ../src/test/java/io/github/luisfm44/caseware/worker/SharedAdmissionTest.java
 [planning-test]: ../src/test/java/io/github/luisfm44/caseware/worker/planning/PublicationFanoutIT.java
 [retry-test]: ../src/test/java/io/github/luisfm44/caseware/worker/retry/RetryingDownstreamClientTest.java
