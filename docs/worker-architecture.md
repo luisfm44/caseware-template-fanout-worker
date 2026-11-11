@@ -67,6 +67,21 @@ The semaphore shares capacity within a single JVM. A deployment with separate wo
 
 After an interruption, a new planner resumes from the last committed cursor. Replaying a fully planned publication returns immediately. Planning records jobs for downstream execution, which continues to use the separate admission and worker contracts above.
 
+## Downstream retries and reconciliation
+
+[`RetryingDownstreamClient`][retry] implements `DownstreamClient`. It holds the worker's permit across the initial dispatch, any backoff and any reconciliation. Every submission and lookup uses the same `OperationId`.
+
+| Downstream outcome | Worker behavior |
+| --- | --- |
+| Applied | Complete successfully and release the permit. |
+| Throttled or confirmed transient failure | Retry if the attempt had no effect and can no longer execute. Use exponential backoff with jitter and wait at least as long as the downstream's `Retry-After` hint. |
+| Timeout or lost reply | Ask the [transport][transport] to reconcile the original operation by ID. Confirmed success completes the operation without another submission. A retry requires confirmation that the earlier attempt had no effect and can no longer execute. |
+| Permanent rejection | Return a terminal failure and release the permit. |
+
+Each execution allows three submissions, including the initial attempt. A confirmed rejection or exhausted retry budget produces a [`DownstreamFailure`][failure] with the reason, submission count and last submission outcome. An unresolved lookup keeps the terminal stage pending, so a caller timeout cannot free the slot or cause a second dispatch.
+
+The transport must supply authoritative status and use the operation ID as its idempotency key. The controlled test transport records applied effects and can lose a reply after recording an effect. The worker then reconciles by ID, and the test verifies one submission and one effect. The retry counter is scoped to a worker execution.
+
 [operation]: ../src/main/java/io/github/luisfm44/caseware/worker/OperationId.java
 [worker]: ../src/main/java/io/github/luisfm44/caseware/worker/FanoutWorker.java
 [admission]: ../src/main/java/io/github/luisfm44/caseware/worker/AdmissionController.java
@@ -79,3 +94,6 @@ After an interruption, a new planner resumes from the last committed cursor. Rep
 [planner]: ../src/main/java/io/github/luisfm44/caseware/worker/planning/PublicationFanout.java
 [source]: ../src/main/java/io/github/luisfm44/caseware/worker/planning/EngagementSource.java
 [store]: ../src/main/java/io/github/luisfm44/caseware/worker/planning/PostgresFanoutStore.java
+[retry]: ../src/main/java/io/github/luisfm44/caseware/worker/retry/RetryingDownstreamClient.java
+[transport]: ../src/main/java/io/github/luisfm44/caseware/worker/retry/DownstreamTransport.java
+[failure]: ../src/main/java/io/github/luisfm44/caseware/worker/retry/DownstreamFailure.java

@@ -9,7 +9,7 @@ Two logical workers share one admission controller and one simulated downstream 
 <!-- Image exported from the Mermaid diagram in docs/worker-architecture.md. -->
 ![Two workers share one admission controller with three slots and dispatch admitted operations to the same simulated downstream.](docs/worker-architecture.svg)
 
-[Worker components and operation lifecycle](docs/worker-architecture.md) · [System architecture and diagrams](docs/architecture.pdf) · [AWS cost model with editable assumptions](docs/aws-cost-model.xlsx)
+[Worker components and operation lifecycle](docs/worker-architecture.md) · [Downstream retries and reconciliation](docs/worker-architecture.md#downstream-retries-and-reconciliation) · [System architecture and diagrams](docs/architecture.pdf) · [AWS cost model with editable assumptions](docs/aws-cost-model.xlsx)
 
 ## Run locally
 
