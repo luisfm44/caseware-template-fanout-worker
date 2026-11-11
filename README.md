@@ -1,15 +1,33 @@
-# Template publish fan-out worker
+# Caseware template publish fan-out worker
 
-Caseware Staff Java take-home. The worker plans template publication jobs for eligible engagements, persists progress in PostgreSQL and coordinates execution against a shared downstream capacity pool.
+This Caseware Staff Java take-home demonstrates how to plan a template publication across eligible engagements, resume from a durable PostgreSQL checkpoint and execute the jobs under a shared downstream capacity limit. It uses **Java 25**, **Spring Boot 4.1.2**, the **Maven 3.9.16 Wrapper** and **PostgreSQL 18.6** for local integration tests and the executable demo.
 
-## Worker architecture
+## Developer documentation
 
-Planning commits each page of jobs with its checkpoint in PostgreSQL. Execution uses the same operation ID for admission, dispatch, retries and reconciliation. The executable demo connects these paths and runs two logical workers in one JVM against a simulated downstream.
+- [GitHub Wiki Home](https://github.com/luisfm44/caseware-template-fanout-worker/wiki) and [Getting Started](https://github.com/luisfm44/caseware-template-fanout-worker/wiki/Getting-Started) explain how to build, test and run the demo.
+- [Contributor Workflow on the Wiki](https://github.com/luisfm44/caseware-template-fanout-worker/wiki/Contributor-Workflow) and the [versioned contributor guide](docs/contributing.md) explain issue creation, branch names and pull requests.
+- [Code Quality and CI on the Wiki](https://github.com/luisfm44/caseware-template-fanout-worker/wiki/Code-Quality-and-CI), [pipeline reference](docs/pipelines.md) and [SonarQube guide](docs/code-quality.md) explain validation and how to find reports.
+- [Architecture on the Wiki](https://github.com/luisfm44/caseware-template-fanout-worker/wiki/Architecture) covers the runnable application and the proposed regional system.
+
+## Architecture
+
+### Runnable Java application
+
+Planning commits each page of jobs with its checkpoint in PostgreSQL. The demo reads the persisted operation IDs and hands them to two workers in one JVM. The workers share three slots and reuse each operation ID for dispatch, retries and reconciliation against the simulated downstream.
 
 <!-- Image exported from the Mermaid diagram in docs/worker-architecture.md. -->
-![Caseware worker architecture showing PostgreSQL publication planning and downstream execution sharing an operation ID.](docs/worker-architecture.svg)
+![Spring Boot demo flow from a publication through PostgreSQL planning, shared admission, downstream execution and the JSON report.](docs/worker-architecture.svg)
 
-[Worker architecture and verification](docs/worker-architecture.md) · [Worker design decisions](docs/worker-design.md) · [System architecture and implementation appendix](docs/architecture.pdf) · [AWS cost model with editable assumptions](docs/aws-cost-model.xlsx)
+[Worker architecture, including lost-reply sequence](docs/worker-architecture.md) · [Worker design decisions](docs/worker-design.md)
+
+### Proposed regional system
+
+The system proposal places the Java worker in a regional background verification flow alongside the template catalog, regional updates API and engagement manager. Regional services own engagement data and durable outcomes. The [system architecture guide](docs/system-architecture.md) maps the local demo to that wider deployment.
+
+<!-- Image exported from the Mermaid diagram in docs/system-architecture.md. -->
+![Proposed regional architecture connecting shared template publication with the regional catalog, updates API and background worker.](docs/system-architecture.svg)
+
+[System architecture proposal and implementation appendix](docs/architecture.pdf) · [AWS cost model with editable assumptions](docs/aws-cost-model.xlsx)
 
 ## Run locally
 
@@ -61,6 +79,14 @@ The demo measures shared capacity within one JVM. PostgreSQL makes planning dura
 - **SonarQube quality** runs on pushes to `main` and on manual dispatch within **Verify and scan**. It combines unit and PostgreSQL test coverage, requires full JaCoCo line and branch coverage and enforces a 100% overall SonarQube Quality Gate. [Run and inspect code quality checks](docs/code-quality.md)
 - **Run local deployment demo** is a manual smoke workflow on an isolated runner. It starts a PostgreSQL service, builds the JAR and launches the demo profile. The workflow checks the report for successful completion, single effects, shared capacity, resumed planning and reconciliation, then uploads the JSON report as an artifact. [Demo workflow](.github/workflows/demo.yml)
 
+Every Java change must keep **100% line and branch coverage in JaCoCo** and pass the **100% overall SonarQube Quality Gate**. The PR's automatic checks are `verify` and `security`. Run **Verify and scan** manually on the PR branch to record the full SonarQube result for Java changes. [Pipeline event matrix and troubleshooting](docs/pipelines.md)
+
+## Issues, branches and pull requests
+
+Create an issue with acceptance criteria and track it in the [Caseware GitHub Project](https://github.com/users/luisfm44/projects/2). Choose a branch prefix for the type of work, for example `feature/issue-2-resumable-fanout`, `test/issue-12-full-coverage` or `docs/issue-9-developer-wiki`. Start from the latest `main` and open a draft PR targeting `main` with `Closes #N` to link the issue it completes.
+
+The board moves through **Todo → In Progress → Test → Done**. Record test and review evidence in **Test**. After squash merge, confirm the issue is closed, the card is in **Done** and its **Linked pull requests** field shows the merged PR. [Full contributor workflow](docs/contributing.md)
+
 ## AI assistance and human judgment
 
 I used ChatGPT and Codex to compare implementation options and draft Java code, tests, CI configuration and documentation. During Issue #2, Codex initially proposed H2 for the durable checkpoint store. I asked to use PostgreSQL in Docker. The implementation used PostgreSQL transactions, a named development volume and integration tests against PostgreSQL in CI.
@@ -73,9 +99,5 @@ Production decisions still require human judgment. These include choosing who ow
 2. [Page through engagements and resume the fan-out after a crash](https://github.com/luisfm44/caseware-template-fanout-worker/issues/2). Replaying a publication preserves job identity.
 3. [Lose the response after a successful downstream effect](https://github.com/luisfm44/caseware-template-fanout-worker/issues/3). Retry with the same operation key or reconcile the recorded outcome.
 4. [Verify the executable artifact and record implementation tradeoffs and the actual use of AI in this README](https://github.com/luisfm44/caseware-template-fanout-worker/issues/4).
-
-### Follow-up issues
-
-- [SonarQube code quality analysis and reproduction](docs/code-quality.md) · [Issue #8](https://github.com/luisfm44/caseware-template-fanout-worker/issues/8)
-- [Full Java test coverage](https://github.com/luisfm44/caseware-template-fanout-worker/issues/12)
-- [GitHub Wiki for contributors and reviewers](https://github.com/luisfm44/caseware-template-fanout-worker/issues/9)
+5. [Integrate SonarQube](https://github.com/luisfm44/caseware-template-fanout-worker/issues/8) and [reach full Java test coverage](https://github.com/luisfm44/caseware-template-fanout-worker/issues/12).
+6. [Publish the contributor and reviewer Wiki](https://github.com/luisfm44/caseware-template-fanout-worker/issues/9).
