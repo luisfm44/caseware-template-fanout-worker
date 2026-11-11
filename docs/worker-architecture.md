@@ -49,7 +49,7 @@ flowchart TB
     class WORKER,ADMISSION,RETRY,TRANSPORT execution
 ```
 
-The dotted lines show where the identity is used. The Spring Boot entry point starts the application, and the tests assemble the planning and execution paths directly. Automatic consumption of PostgreSQL jobs and a production transport adapter are integration work.
+The dotted lines show where the identity is used. The Spring Boot `demo` profile joins the two paths for a bounded sample by reading the persisted IDs and passing them to the workers. Automatic job claiming and a production transport adapter are deployment work.
 
 ## Components
 
@@ -65,7 +65,9 @@ The dotted lines show where the identity is used. The Spring Boot entry point st
 | [`PublicationFanout`][planner] and [`EngagementSource`][source] | Read bounded, stable pages of eligible engagements and produce job IDs. |
 | [`PostgresFanoutStore`][store] | Persists each page's jobs and checkpoint in one transaction. |
 | [`RetryingDownstreamClient`][retry] and [`DownstreamTransport`][transport] | Apply the retry policy and submit or reconcile a downstream operation by ID. |
-| [`TemplateFanoutWorkerApplication`][boot] | Starts Spring Boot 4.1.2. Tests construct the planner and workers directly. |
+| [`TemplateFanoutWorkerApplication`][boot] | Starts Spring Boot 4.1.2 and activates the demo runner when the `demo` profile is selected. |
+| [`DemoRunner`][demo] | Plans and reads the sample publication in PostgreSQL, runs two logical workers and writes the JSON report. |
+| [`SimulatedDownstream`][simulator] | Controls when replies arrive, records effects by operation ID and loses one reply after applying its effect. |
 
 ## Operation lifecycle
 
@@ -105,11 +107,19 @@ Each execution allows three submissions, including the initial attempt. A confir
 
 The transport must supply authoritative status and use the operation ID as its idempotency key. The controlled test transport records applied effects and can lose a reply after recording an effect. The worker then reconciles by ID, and the test verifies one submission and one effect. The retry counter is scoped to a worker execution.
 
+## Executable demo
+
+1. The runner creates a disposable PostgreSQL schema. It plans the first page of a seven-engagement publication and creates a fresh planner to resume from its committed checkpoint.
+2. After planning finishes in four pages, the runner reads the stored job IDs. It alternates submissions between two workers until their shared pool of three slots is full.
+3. The simulator completes a batch and applies each effect once. For one job it loses the reply after applying the effect. The client confirms the result by operation ID without resubmitting.
+4. The runner checks the report totals, removes the demo schema and writes the JSON report. [Run the demo](../README.md#postgresql-integration-tests-and-executable-demo)
+
 ## Verification
 
 - [`SharedAdmissionTest`][test] measures the downstream concurrency peak and verifies permit retention after a caller timeout.
 - [`PublicationFanoutIT`][planning-test] runs against PostgreSQL and checks resume, replay, rollback and stale checkpoints.
 - [`RetryingDownstreamClientTest`][retry-test] checks the single-effect recovery, bounded retries and rejection paths with controlled responses.
+- The [manual demo workflow](../.github/workflows/demo.yml) builds and runs the packaged JAR against PostgreSQL, checks the report and uploads it as a workflow artifact.
 
 See the [worker design decisions](worker-design.md) for the rationale and how the current implementation maps to the system proposal.
 
@@ -130,3 +140,5 @@ See the [worker design decisions](worker-design.md) for the rationale and how th
 [failure]: ../src/main/java/io/github/luisfm44/caseware/worker/retry/DownstreamFailure.java
 [planning-test]: ../src/test/java/io/github/luisfm44/caseware/worker/planning/PublicationFanoutIT.java
 [retry-test]: ../src/test/java/io/github/luisfm44/caseware/worker/retry/RetryingDownstreamClientTest.java
+[demo]: ../src/main/java/io/github/luisfm44/caseware/worker/demo/DemoRunner.java
+[simulator]: ../src/main/java/io/github/luisfm44/caseware/worker/demo/SimulatedDownstream.java
