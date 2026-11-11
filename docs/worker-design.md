@@ -38,7 +38,7 @@ JaCoCo combines coverage from the unit and PostgreSQL integration suites. SonarQ
 
 [Issue #12][issue-12] sets the floor at 100% and checks line and branch coverage independently in Maven. Tests exercise worker validation, retry and reconciliation paths, real PostgreSQL transactions and the demo. The isolated negative probe uses unit-only execution data to verify that SonarQube rejects a drop in coverage.
 
-The [GitHub Wiki][issue-9] remains a follow-up for reviewer and contributor navigation.
+The [GitHub Wiki][wiki] provides navigation for reviewers and contributors. The [contributor guide](contributing.md) and [pipeline reference](pipelines.md) record the delivery workflow in the repository. [Issue #9][issue-9]
 
 When an issue changes a contract, component boundary, or verification step, update the affected design decision and architecture section in the same pull request. Link the issue and the test or workflow that demonstrates the change. Update the system design appendix when the change affects the relationship between the implementation and the proposed deployment.
 
@@ -49,6 +49,7 @@ When an issue changes a contract, component boundary, or verification step, upda
 [issue-8]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/8
 [issue-9]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/9
 [issue-12]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/12
+[wiki]: https://github.com/luisfm44/caseware-template-fanout-worker/wiki
 [admission-test]: ../src/test/java/io/github/luisfm44/caseware/worker/SharedAdmissionTest.java
 [planning-test]: ../src/test/java/io/github/luisfm44/caseware/worker/planning/PublicationFanoutIT.java
 [retry-test]: ../src/test/java/io/github/luisfm44/caseware/worker/retry/RetryingDownstreamClientTest.java

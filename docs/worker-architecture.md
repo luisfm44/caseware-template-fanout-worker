@@ -1,6 +1,6 @@
 # Worker architecture
 
-The implementation has a planning path and an execution path. Both use `OperationId` for the same engagement work. Planning records the jobs in PostgreSQL. Execution starts when a caller supplies a job's ID to the worker.
+The Java 25 application runs the sample with Spring Boot 4.1.2 and the `demo` profile. `DemoRunner` connects publication planning in PostgreSQL to two logical workers that share three downstream slots in one JVM.
 
 ```mermaid
 ---
@@ -8,48 +8,51 @@ config:
   theme: neutral
   htmlLabels: false
   flowchart:
-    rankSpacing: 32
-    nodeSpacing: 28
-    wrappingWidth: 240
+    rankSpacing: 28
+    nodeSpacing: 20
+    wrappingWidth: 220
+    subGraphTitleMargin:
+      top: 4
+      bottom: 18
 ---
 flowchart TB
-    accTitle: Caseware worker architecture
-    accDescr: Publication planning records operation IDs and checkpoints in PostgreSQL. Separately, a caller supplies an operation ID to a worker that acquires a permit and submits or reconciles that operation through the downstream transport.
+    accTitle: Java worker demo
+    accDescr: Spring Boot launches DemoRunner. PublicationFanout commits jobs and a checkpoint in PostgreSQL. DemoRunner reads the stored IDs and supplies them to two workers with three shared permits. The retry client submits or reconciles each ID through a simulator. DemoRunner writes the final report.
 
-    KEY["OperationId<br/>Shared job and execution identity"]
+    RUNNER["DemoRunner<br/>Java 25 · Spring Boot 4.1.2"]
+    REPORT["fanout-demo.json"]
 
-    subgraph PLAN["Publication planning"]
-        direction TB
-        PLANNER["PublicationFanout"]
-        SOURCE["EngagementSource<br/>Eligible pages"]
+    subgraph PLAN["Plan and resume"]
+        direction LR
+        PLANNER["PublicationFanout<br/>Seven jobs across four pages"]
         DB[("PostgreSQL<br/>Jobs and checkpoint")]
-        PLANNER -->|"Read page"| SOURCE
-        PLANNER -->|"Commit page"| DB
+        PLANNER -->|"Commit each page"| DB
     end
 
-    subgraph EXEC["Worker execution"]
+    subgraph EXEC["Execute persisted jobs"]
         direction TB
-        WORKER["FanoutWorker"]
-        ADMISSION["AdmissionController<br/>Shared within one JVM"]
-        RETRY["RetryingDownstreamClient"]
-        TRANSPORT["DownstreamTransport<br/>Simulated in tests"]
-        WORKER -->|"Reserve slot"| ADMISSION
-        WORKER -->|"Start operation"| RETRY
-        RETRY -->|"Submit or reconcile"| TRANSPORT
+        WORKERS["FanoutWorker A and B"]
+        ADMIT["Shared admission<br/>Three permits in one JVM"]
+        CLIENT["RetryingDownstreamClient"]
+        TRANSPORT["SimulatedDownstream<br/>Effects tracked by ID"]
+        WORKERS -->|"Reserve and release"| ADMIT
+        WORKERS -->|"Dispatch"| CLIENT
+        CLIENT -->|"Submit or reconcile"| TRANSPORT
     end
 
-    KEY -.->|"Job key"| PLAN
-    KEY -.->|"Caller supplies ID"| EXEC
+    RUNNER --> PLAN
+    PLAN -->|"DemoRunner reads stored OperationIds"| EXEC
+    EXEC -->|"DemoRunner writes results"| REPORT
 
-    classDef identity fill:#f6f8fa,stroke:#8c959f,color:#24292f
+    classDef app fill:#f6f8fa,stroke:#8c959f,color:#24292f
     classDef planning fill:#e6ffec,stroke:#2da44e,color:#24292f
     classDef execution fill:#ddf4ff,stroke:#218bff,color:#24292f
-    class KEY identity
-    class PLANNER,SOURCE,DB planning
-    class WORKER,ADMISSION,RETRY,TRANSPORT execution
+    class RUNNER,REPORT app
+    class PLANNER,DB planning
+    class WORKERS,ADMIT,CLIENT,TRANSPORT execution
 ```
 
-The dotted lines show where the identity is used. The Spring Boot `demo` profile joins the two paths for a bounded sample by reading the persisted IDs and passing them to the workers. Automatic job claiming and a production transport adapter are deployment work.
+The demo consumes its own stored job IDs in a disposable schema. Production integration calls for a durable job consumer, authoritative downstream status and shared admission across worker processes. [Proposed regional architecture](system-architecture.md) · [Worker design decisions](worker-design.md)
 
 ## Components
 
@@ -106,6 +109,40 @@ After an interruption, a new planner resumes from the last committed cursor. Rep
 Each execution allows three submissions, including the initial attempt. A confirmed rejection or exhausted retry budget produces a [`DownstreamFailure`][failure] with the reason, submission count and last submission outcome. An unresolved lookup keeps the terminal stage pending, so a caller timeout cannot free the slot or cause a second dispatch.
 
 The transport must supply authoritative status and use the operation ID as its idempotency key. The controlled test transport records applied effects and can lose a reply after recording an effect. The worker then reconciles by ID, and the test verifies one submission and one effect. The retry counter is scoped to a worker execution.
+
+### Recovering a lost reply
+
+```mermaid
+---
+config:
+  theme: neutral
+  sequence:
+    mirrorActors: false
+---
+sequenceDiagram
+    participant D as DemoRunner
+    participant W as FanoutWorker
+    participant A as Shared admission
+    participant C as RetryingDownstreamClient
+    participant T as SimulatedDownstream
+
+    D->>W: tryStart(OperationId)
+    W->>A: Reserve one permit
+    A-->>W: Permit
+    W->>C: Start with OperationId
+    C->>T: Submit OperationId
+    W-->>D: Caller future
+    D->>T: Complete the pending batch
+    Note over T: Record effect by ID
+    T-->>C: Reply lost after effect
+    C->>T: Reconcile the same OperationId
+    T-->>C: APPLIED
+    C-->>W: Confirmed terminal success
+    W->>A: Close the permit
+    W-->>D: Complete the caller future
+```
+
+The status lookup completes the original operation. If the lookup cannot confirm the outcome, the worker keeps the slot reserved until the downstream reports a terminal state.
 
 ## Executable demo
 
