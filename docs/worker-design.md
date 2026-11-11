@@ -39,7 +39,7 @@ Issues [#15](https://github.com/luisfm44/caseware-template-fanout-worker/issues/
 
 The HTTP adapter uses `POST /submit` and `POST /resolve` at the configured downstream origin. Both carry URL-encoded form fields `firmId`, `engagementId`, `publicationId`, `engagementRevision` and `attemptId`. A successful HTTP response has a plain-text outcome of `APPLIED`, `REJECTED`, `NOT_APPLIED` or `PENDING`, with optional `Retry-After` in seconds. Errors and unusable responses leave the outcome uncertain. The engagement manager owns durable idempotency by operation ID and validates the expected revision. A `NOT_APPLIED` response certifies that the attempt had no effect and is fenced against late execution. An absent record alone provides insufficient evidence.
 
-The [process integration test](../src/test/java/io/github/luisfm44/caseware/worker/durable/DurableWorkerProcessIT.java) uses a shared HTTP test downstream. The regional deployment needs a compatible engagement manager to enforce these guarantees and own the real capacity pool. [Regional architecture](system-architecture.md)
+The [process integration test](../src/test/java/io/github/luisfm44/caseware/worker/bootstrap/DurableWorkerProcessIT.java) uses a shared HTTP test downstream. The regional deployment needs a compatible engagement manager to enforce these guarantees and own the real capacity pool. [Regional architecture](system-architecture.md)
 
 ## Scheduling across firms
 
@@ -47,7 +47,7 @@ Issue [#18](https://github.com/luisfm44/caseware-template-fanout-worker/issues/1
 
 With a fixed set of continuously eligible firms, each receives a reservation within one rotation. Two eligible firms alternate when both have ready work. A sole eligible firm can use all available capacity. Deferred retries participate when they become due. Reconciliation keeps the existing reservation and leaves the cursor in place. The guarantee is expressed in new reservations when slots become available. Independent HTTP calls can reach the downstream in a different order when several slots open together.
 
-The [two-JVM integration test](../src/test/java/io/github/luisfm44/caseware/worker/durable/DurableWorkerProcessIT.java) fills a two-slot pool with large-firm work, adds a small firm and releases one slot. It checks that the next downstream start belongs to the small firm with 30 large-firm jobs still ready. It then verifies that the large firm resumes and that the measured peak stays at two. Apply the worker version to all replicas sharing the schema before relying on the rotation across the pool.
+The [two-JVM integration test](../src/test/java/io/github/luisfm44/caseware/worker/bootstrap/DurableWorkerProcessIT.java) fills a two-slot pool with large-firm work, adds a small firm and releases one slot. It checks that the next downstream start belongs to the small firm with 30 large-firm jobs still ready. It then verifies that the large firm resumes and that the measured peak stays at two. Apply the worker version to all replicas sharing the schema before relying on the rotation across the pool.
 
 ## Code quality · Issue [#8][issue-8]
 
@@ -67,6 +67,6 @@ When an issue changes a contract, component boundary, or verification step, upda
 [issue-9]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/9
 [issue-12]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/12
 [wiki]: https://github.com/luisfm44/caseware-template-fanout-worker/wiki
-[admission-test]: ../src/test/java/io/github/luisfm44/caseware/worker/SharedAdmissionTest.java
+[admission-test]: ../src/test/java/io/github/luisfm44/caseware/worker/execution/admission/SharedAdmissionTest.java
 [planning-test]: ../src/test/java/io/github/luisfm44/caseware/worker/planning/PublicationFanoutIT.java
-[retry-test]: ../src/test/java/io/github/luisfm44/caseware/worker/retry/RetryingDownstreamClientTest.java
+[retry-test]: ../src/test/java/io/github/luisfm44/caseware/worker/execution/retry/RetryingDownstreamClientTest.java

@@ -13,18 +13,18 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
 import javax.sql.DataSource;
 
-import io.github.luisfm44.caseware.worker.AdmissionController;
-import io.github.luisfm44.caseware.worker.FanoutWorker;
-import io.github.luisfm44.caseware.worker.InMemoryAdmissionController;
-import io.github.luisfm44.caseware.worker.OperationId;
+import io.github.luisfm44.caseware.worker.adapter.memory.InMemoryAdmissionControl;
+import io.github.luisfm44.caseware.worker.adapter.postgres.PostgresFanoutStore;
+import io.github.luisfm44.caseware.worker.execution.admission.AdmissionControl;
+import io.github.luisfm44.caseware.worker.execution.model.OperationId;
+import io.github.luisfm44.caseware.worker.execution.retry.RetryingDownstreamClient;
+import io.github.luisfm44.caseware.worker.execution.service.FanoutWorker;
 import io.github.luisfm44.caseware.worker.planning.EngagementSource;
 import io.github.luisfm44.caseware.worker.planning.EngagementSource.Engagement;
 import io.github.luisfm44.caseware.worker.planning.EngagementSource.Page;
 import io.github.luisfm44.caseware.worker.planning.FanoutStore.Checkpoint;
-import io.github.luisfm44.caseware.worker.planning.PostgresFanoutStore;
 import io.github.luisfm44.caseware.worker.planning.Publication;
 import io.github.luisfm44.caseware.worker.planning.PublicationFanout;
-import io.github.luisfm44.caseware.worker.retry.RetryingDownstreamClient;
 import org.postgresql.ds.PGSimpleDataSource;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
@@ -106,7 +106,7 @@ final class DemoRunner implements ApplicationRunner {
         verifyJobs(jobs, expected);
 
         var downstream = new SimulatedDownstream(jobs.getFirst());
-        int completed = executeJobs(jobs, downstream, new InMemoryAdmissionController(CAPACITY));
+        int completed = executeJobs(jobs, downstream, new InMemoryAdmissionControl(CAPACITY));
         var report = new Report(jobs.size(), completed, downstream.duplicateEffects(), CAPACITY,
                 downstream.peakInFlight(), checkpoint.pagesCommitted(), downstream.appliedEffects(),
                 downstream.dispatchAttempts(), downstream.reconciliations());
@@ -133,7 +133,7 @@ final class DemoRunner implements ApplicationRunner {
         }
     }
 
-    static int executeJobs(List<OperationId> jobs, SimulatedDownstream downstream, AdmissionController admission)
+    static int executeJobs(List<OperationId> jobs, SimulatedDownstream downstream, AdmissionControl admission)
             throws Exception {
         var client = new RetryingDownstreamClient(downstream);
         var workers = List.of(new FanoutWorker(admission, client), new FanoutWorker(admission, client));

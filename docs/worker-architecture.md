@@ -54,13 +54,27 @@ flowchart TB
 
 The demo consumes its own stored job IDs in a disposable schema. The separate `postgres-worker` profile claims planned jobs and coordinates slots across JVMs in PostgreSQL. Each fresh claim reserves a slot and advances the shared firm rotation in the same transaction. It reconciles uncertain attempts against an HTTP downstream. The process integration test exercises the protocol with a controlled server. Regional integration requires an engagement manager that supplies authoritative status and enforces idempotency and the real pool limit. [Proposed regional architecture](system-architecture.md) · [Worker design decisions](worker-design.md)
 
+## Package structure
+
+`TemplateFanoutWorkerApplication` is in the root package. Spring Boot scans the profile runners below it.
+
+| Package | Responsibility |
+| --- | --- |
+| `planning` | Plans publications and defines the engagement source and fan-out store contracts. |
+| `execution.model`, `execution.admission` | Hold the operation identity and capacity reservation contracts. |
+| `execution.service`, `execution.port`, `execution.retry` | Orchestrate execution, define job queue and downstream contracts, and implement retries. |
+| `adapter.postgres`, `adapter.http`, `adapter.memory` | Implement those contracts with JDBC, HTTP and the in-memory semaphore. |
+| `bootstrap`, `demo` | Wire the `postgres-worker` profile and run the self-contained `demo` profile. |
+
+`OperationId` is an immutable value object shared by planning and execution. The HTTP adapter maps its fields to the wire format. `Permit` represents a slot with an explicit release lifecycle.
+
 ## Components
 
 | Component | Responsibility |
 | --- | --- |
 | [`OperationId`][operation] | Identifies work by firm, engagement, publication and engagement revision. The same logical work can reuse the ID across workers and attempts. |
 | [`FanoutWorker`][worker] | Acquires a permit before dispatch, passes its operation ID to the downstream and closes the permit when execution reaches a confirmed terminal state. |
-| [`AdmissionController`][admission] and [`InMemoryAdmissionController`][memory] | Define and implement atomic admission. The in-memory implementation uses a semaphore and returns an empty result immediately when every slot is reserved. |
+| [`AdmissionControl`][admission] and [`InMemoryAdmissionControl`][memory] | Define and implement atomic admission. The in-memory implementation uses a semaphore and returns an empty result immediately when every slot is reserved. |
 | [`Permit`][permit] | Represents a reservation for one operation. Its first `close()` returns the slot to the pool. Repeated calls have no effect. |
 | [`DownstreamClient`][downstream] | Dispatches an admitted operation and returns a `CompletionStage`. Success or failure on that stage means the downstream confirmed that execution ended or never started. |
 | [`FakeDownstreamClient`][fake] | Test implementation that keeps operations active until the test finishes them explicitly. It records both the current and peak number of active operations. |
@@ -68,7 +82,8 @@ The demo consumes its own stored job IDs in a disposable schema. The separate `p
 | [`PublicationFanout`][planner] and [`EngagementSource`][source] | Read bounded, stable pages of eligible engagements and produce job IDs. |
 | [`PostgresFanoutStore`][store] | Persists each page's jobs and checkpoint in one transaction. |
 | [`RetryingDownstreamClient`][retry] and [`DownstreamTransport`][transport] | Apply the retry policy and submit or reconcile a downstream operation by ID. |
-| [`TemplateFanoutWorkerApplication`][boot] | Starts Spring Boot 4.1.2 and activates the demo runner when the `demo` profile is selected. |
+| [`TemplateFanoutWorkerApplication`][boot] | Starts Spring Boot 4.1.2 and discovers the runner for the selected profile. |
+| [`DurableWorkerRunner`][durable-runner] and [`DurableWorker`][durable-worker] | The runner wires the durable profile. The worker uses the job queue and downstream contracts to dispatch and reconcile attempts. |
 | [`DemoRunner`][demo] | Plans and reads the sample publication in PostgreSQL, runs two logical workers and writes the JSON report. |
 | [`SimulatedDownstream`][simulator] | Controls when replies arrive, records effects by operation ID and loses one reply after applying its effect. |
 
@@ -97,7 +112,7 @@ After an interruption, a new planner resumes from the last committed cursor. Rep
 
 ## Downstream retries and reconciliation
 
-[`RetryingDownstreamClient`][retry] implements `DownstreamClient`. It holds the worker's permit across the initial dispatch, any backoff and any reconciliation. Every submission and lookup uses the same `OperationId`.
+[`RetryingDownstreamClient`][retry] implements `DownstreamClient` and uses the same `OperationId` for every submission and lookup. `FanoutWorker` keeps the permit reserved across dispatch, backoff and reconciliation until the terminal stage completes.
 
 | Downstream outcome | Worker behavior |
 | --- | --- |
@@ -161,22 +176,24 @@ The status lookup completes the original operation. If the lookup cannot confirm
 
 See the [worker design decisions](worker-design.md) for the rationale and how the current implementation maps to the system proposal.
 
-[operation]: ../src/main/java/io/github/luisfm44/caseware/worker/OperationId.java
-[worker]: ../src/main/java/io/github/luisfm44/caseware/worker/FanoutWorker.java
-[admission]: ../src/main/java/io/github/luisfm44/caseware/worker/AdmissionController.java
-[memory]: ../src/main/java/io/github/luisfm44/caseware/worker/InMemoryAdmissionController.java
-[permit]: ../src/main/java/io/github/luisfm44/caseware/worker/Permit.java
-[downstream]: ../src/main/java/io/github/luisfm44/caseware/worker/DownstreamClient.java
-[fake]: ../src/test/java/io/github/luisfm44/caseware/worker/FakeDownstreamClient.java
-[test]: ../src/test/java/io/github/luisfm44/caseware/worker/SharedAdmissionTest.java
+[operation]: ../src/main/java/io/github/luisfm44/caseware/worker/execution/model/OperationId.java
+[worker]: ../src/main/java/io/github/luisfm44/caseware/worker/execution/service/FanoutWorker.java
+[admission]: ../src/main/java/io/github/luisfm44/caseware/worker/execution/admission/AdmissionControl.java
+[memory]: ../src/main/java/io/github/luisfm44/caseware/worker/adapter/memory/InMemoryAdmissionControl.java
+[permit]: ../src/main/java/io/github/luisfm44/caseware/worker/execution/admission/Permit.java
+[downstream]: ../src/main/java/io/github/luisfm44/caseware/worker/execution/port/DownstreamClient.java
+[fake]: ../src/test/java/io/github/luisfm44/caseware/worker/execution/admission/FakeDownstreamClient.java
+[test]: ../src/test/java/io/github/luisfm44/caseware/worker/execution/admission/SharedAdmissionTest.java
 [boot]: ../src/main/java/io/github/luisfm44/caseware/worker/TemplateFanoutWorkerApplication.java
 [planner]: ../src/main/java/io/github/luisfm44/caseware/worker/planning/PublicationFanout.java
 [source]: ../src/main/java/io/github/luisfm44/caseware/worker/planning/EngagementSource.java
-[store]: ../src/main/java/io/github/luisfm44/caseware/worker/planning/PostgresFanoutStore.java
-[retry]: ../src/main/java/io/github/luisfm44/caseware/worker/retry/RetryingDownstreamClient.java
-[transport]: ../src/main/java/io/github/luisfm44/caseware/worker/retry/DownstreamTransport.java
-[failure]: ../src/main/java/io/github/luisfm44/caseware/worker/retry/DownstreamFailure.java
+[store]: ../src/main/java/io/github/luisfm44/caseware/worker/adapter/postgres/PostgresFanoutStore.java
+[retry]: ../src/main/java/io/github/luisfm44/caseware/worker/execution/retry/RetryingDownstreamClient.java
+[transport]: ../src/main/java/io/github/luisfm44/caseware/worker/execution/port/DownstreamTransport.java
+[failure]: ../src/main/java/io/github/luisfm44/caseware/worker/execution/retry/DownstreamFailure.java
 [planning-test]: ../src/test/java/io/github/luisfm44/caseware/worker/planning/PublicationFanoutIT.java
-[retry-test]: ../src/test/java/io/github/luisfm44/caseware/worker/retry/RetryingDownstreamClientTest.java
+[retry-test]: ../src/test/java/io/github/luisfm44/caseware/worker/execution/retry/RetryingDownstreamClientTest.java
+[durable-runner]: ../src/main/java/io/github/luisfm44/caseware/worker/bootstrap/DurableWorkerRunner.java
+[durable-worker]: ../src/main/java/io/github/luisfm44/caseware/worker/execution/service/DurableWorker.java
 [demo]: ../src/main/java/io/github/luisfm44/caseware/worker/demo/DemoRunner.java
 [simulator]: ../src/main/java/io/github/luisfm44/caseware/worker/demo/SimulatedDownstream.java

@@ -2,10 +2,10 @@ package io.github.luisfm44.caseware.worker.demo;
 
 import java.util.concurrent.TimeoutException;
 
-import io.github.luisfm44.caseware.worker.OperationId;
-import io.github.luisfm44.caseware.worker.retry.DownstreamTransport.Outcome;
-import io.github.luisfm44.caseware.worker.retry.DownstreamTransport.Reply;
-import io.github.luisfm44.caseware.worker.retry.DownstreamTransport.Resolution;
+import io.github.luisfm44.caseware.worker.execution.model.OperationId;
+import io.github.luisfm44.caseware.worker.execution.port.DownstreamTransport.Outcome;
+import io.github.luisfm44.caseware.worker.execution.port.DownstreamTransport.Reply;
+import io.github.luisfm44.caseware.worker.execution.port.DownstreamTransport.Resolution;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
