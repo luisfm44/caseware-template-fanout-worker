@@ -142,8 +142,8 @@ export SONAR_HOST_URL SONAR_TOKEN
 
 scanner_exit=0
 (
-    # The isolated project has one main branch, even for a manual CI run of a feature ref.
-    unset GITHUB_ACTIONS GITHUB_EVENT_NAME GITHUB_REF GITHUB_REF_NAME GITHUB_BASE_REF GITHUB_HEAD_REF
+    # Community Build analyzes the checkout as main. Disable GitHub branch auto-detection.
+    unset GITHUB_ACTION GITHUB_ACTIONS GITHUB_REF GITHUB_REF_NAME GITHUB_BASE_REF GITHUB_HEAD_REF
     ./mvnw --batch-mode --no-transfer-progress -Pcoverage \
         "-Dfanout.build.directory=$build_directory" \
         "-Dsonar.projectKey=$project_key" \

@@ -89,7 +89,7 @@ jobs:
   quality:
     if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     concurrency:
-      group: sonarqube-${{ github.ref }}
+      group: sonarqube-${{ github.ref == 'refs/heads/main' && 'main' || github.run_id }}
       cancel-in-progress: false
     runs-on: ubuntu-24.04
     timeout-minutes: 20
