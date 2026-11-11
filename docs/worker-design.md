@@ -12,6 +12,8 @@ The semaphore coordinates workers in a single JVM. Separate worker processes wou
 
 The planner converts each bounded page of eligible engagements into jobs keyed by `OperationId`, which combines firm, engagement, publication, and engagement revision. PostgreSQL commits the page's jobs and checkpoint together. A checkpoint comparison rejects a stale writer, and the job key makes page replay safe. The engagement source must preserve membership, revision, order, and cursor meaning for the life of a publication. [PostgreSQL integration tests][planning-test]
 
+`PostgresFanoutStore` uses JDBC directly. The SQL expresses the checkpoint comparison and unique job key, and the store commits or rolls back the page explicitly. The current schema has two tables. An ORM such as Hibernate would provide entity mapping if the model grows to include more relationships and entity lifecycles.
+
 A fresh planner resumes from the last committed cursor after interruption. The transaction boundary covers planning data. The deployment still needs a consumer to claim persisted jobs and pass their operation IDs to the execution path.
 
 ## Downstream reconciliation · Issue [#3][issue-3]
@@ -20,11 +22,17 @@ The retrying client carries the same operation ID through every submission and s
 
 The three-submission budget applies to one worker execution and is held in memory. The worker retains its permit during backoff and unresolved reconciliation, which can reduce throughput when status is unavailable. A live downstream adapter must enforce idempotency and supply authoritative status. The current tests use a controlled transport that can record an effect, lose the reply, and confirm that only one effect occurred.
 
+## Executable demo · Issue [#4][issue-4]
+
+The Spring Boot `demo` profile connects the planning and execution paths in one bounded run. It uses PostgreSQL in a disposable schema, commits the first page of a seven-engagement publication, and creates a fresh planner to finish from the persisted cursor. The demo reads the resulting job IDs and passes them to two logical workers that share three admission slots.
+
+The simulator holds submissions under test control so the demo can measure overlap. For one operation it applies the effect and drops the reply. The worker uses the same key to reconcile the applied effect, and the demo reports dispatch attempts and lookups alongside the effect count and observed peak. The run removes its temporary schema. [Run the demo](../README.md#postgresql-integration-tests-and-executable-demo) · [Smoke workflow](../.github/workflows/demo.yml)
+
 ## Deployment and follow-up
 
-The Spring Boot entry point starts the application. The test suites assemble the planning and execution paths independently. A running deployment will need job consumption, a live downstream adapter, and shared admission for multiple worker processes. The broader proposal also covers regional ownership and data residency. [System design](architecture.pdf)
+The demo reads the jobs for one publication and dispatches them in one process. A production deployment needs a durable consumer to claim jobs, a live downstream adapter with authoritative status and durable idempotency, and shared admission for multiple worker processes. The broader proposal also covers regional ownership and data residency. [System design](architecture.pdf)
 
-The open follow-ups cover the [executable demo and reviewer handoff][issue-4], [SonarQube quality checks][issue-8], and the [GitHub Wiki][issue-9].
+The open follow-ups cover [SonarQube quality checks][issue-8] and the [GitHub Wiki][issue-9].
 
 When an issue changes a contract, component boundary, or verification step, update the affected design decision and architecture section in the same pull request. Link the issue and the test or workflow that demonstrates the change. Update the system design appendix when the change affects the relationship between the implementation and the proposed deployment.
 

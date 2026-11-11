@@ -3,6 +3,7 @@ package io.github.luisfm44.caseware.worker.planning;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import javax.sql.DataSource;
@@ -65,6 +66,34 @@ public final class PostgresFanoutStore implements FanoutStore {
             }
         } catch (SQLException failure) {
             throw new IllegalStateException("Could not read fan-out checkpoint", failure);
+        }
+    }
+
+    /** Lists at most limit planned jobs for the publication in stable key order. */
+    public List<OperationId> listJobs(Publication publication, int limit) {
+        if (limit <= 0) {
+            throw new IllegalArgumentException("limit must be positive");
+        }
+        try (var connection = dataSource.getConnection();
+                var statement = connection.prepareStatement("""
+                        SELECT engagement_id, engagement_revision
+                        FROM fanout_job
+                        WHERE firm_id = ? AND publication_id = ?
+                        ORDER BY engagement_id, engagement_revision
+                        LIMIT ?
+                        """)) {
+            bindPublication(statement, 1, publication);
+            statement.setInt(3, limit);
+            try (var rows = statement.executeQuery()) {
+                var jobs = new ArrayList<OperationId>();
+                while (rows.next()) {
+                    jobs.add(new OperationId(publication.firmId(), rows.getString(1),
+                            publication.publicationId(), rows.getString(2)));
+                }
+                return List.copyOf(jobs);
+            }
+        } catch (SQLException failure) {
+            throw new IllegalStateException("Could not list planned fan-out jobs", failure);
         }
     }
 
