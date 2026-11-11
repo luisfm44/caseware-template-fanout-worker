@@ -20,6 +20,8 @@ Planning commits each page of jobs with its checkpoint in PostgreSQL. The `demo`
 
 [Worker architecture, including lost-reply sequence](docs/worker-architecture.md) · [Worker design decisions](docs/worker-design.md)
 
+See the [Java package structure](docs/worker-architecture.md#package-structure) for the application services, contracts, adapters and Spring Boot entry points.
+
 ### Proposed regional system
 
 The system proposal places the Java worker in a regional background verification flow alongside the template catalog, regional updates API and engagement manager. Regional services own engagement data and durable outcomes. The [system architecture guide](docs/system-architecture.md) maps the local demo to that wider deployment.

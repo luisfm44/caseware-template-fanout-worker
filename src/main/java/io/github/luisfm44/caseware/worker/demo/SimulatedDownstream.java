@@ -9,8 +9,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeoutException;
 
-import io.github.luisfm44.caseware.worker.OperationId;
-import io.github.luisfm44.caseware.worker.retry.DownstreamTransport;
+import io.github.luisfm44.caseware.worker.execution.model.OperationId;
+import io.github.luisfm44.caseware.worker.execution.port.DownstreamTransport;
+
 
 /** A single-threaded downstream controlled by the demo runner. */
 final class SimulatedDownstream implements DownstreamTransport {

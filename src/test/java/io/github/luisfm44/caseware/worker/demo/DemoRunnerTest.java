@@ -3,7 +3,7 @@ package io.github.luisfm44.caseware.worker.demo;
 import java.util.List;
 import java.util.Optional;
 
-import io.github.luisfm44.caseware.worker.OperationId;
+import io.github.luisfm44.caseware.worker.execution.model.OperationId;
 import io.github.luisfm44.caseware.worker.planning.FanoutStore.Checkpoint;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.DefaultApplicationArguments;

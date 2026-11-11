@@ -2,7 +2,8 @@ package io.github.luisfm44.caseware.worker.planning;
 
 import java.util.List;
 
-import io.github.luisfm44.caseware.worker.OperationId;
+import io.github.luisfm44.caseware.worker.execution.model.OperationId;
+
 
 public interface FanoutStore {
 

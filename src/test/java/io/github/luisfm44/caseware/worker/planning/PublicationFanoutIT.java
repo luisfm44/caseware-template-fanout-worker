@@ -7,7 +7,8 @@ import java.util.List;
 import java.util.UUID;
 import javax.sql.DataSource;
 
-import io.github.luisfm44.caseware.worker.OperationId;
+import io.github.luisfm44.caseware.worker.adapter.postgres.PostgresFanoutStore;
+import io.github.luisfm44.caseware.worker.execution.model.OperationId;
 import io.github.luisfm44.caseware.worker.planning.EngagementSource.Engagement;
 import io.github.luisfm44.caseware.worker.planning.EngagementSource.Page;
 import io.github.luisfm44.caseware.worker.planning.FanoutStore.Checkpoint;
