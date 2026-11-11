@@ -16,11 +16,17 @@
   <name>Caseware template fan-out worker</name>
   <properties>
     <java.version>25</java.version>
+    <fanout.build.directory>${project.basedir}/target</fanout.build.directory>
   </properties>
   <dependencies>
     <dependency>
       <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.postgresql</groupId>
+      <artifactId>postgresql</artifactId>
+      <scope>runtime</scope>
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
@@ -29,6 +35,7 @@
     </dependency>
   </dependencies>
   <build>
+    <directory>${fanout.build.directory}</directory>
     <finalName>template-fanout-worker</finalName>
     <plugins>
       <plugin>
@@ -48,4 +55,25 @@
       </plugin>
     </plugins>
   </build>
+  <profiles>
+    <profile>
+      <id>postgres-integration</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-failsafe-plugin</artifactId>
+            <configuration>
+              <failIfNoTests>true</failIfNoTests>
+              <excludes>
+                <exclude>**/*$*</exclude>
+                <!-- Ignore AppleDouble metadata on external macOS volumes. -->
+                <exclude>**/._*</exclude>
+              </excludes>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 </project>
