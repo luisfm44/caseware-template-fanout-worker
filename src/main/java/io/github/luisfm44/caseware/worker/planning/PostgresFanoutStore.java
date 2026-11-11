@@ -59,10 +59,7 @@ public final class PostgresFanoutStore implements FanoutStore {
                         """)) {
             bindPublication(statement, 1, publication);
             try (var rows = statement.executeQuery()) {
-                if (rows.next()) {
-                    return new Checkpoint(rows.getLong(1), rows.getString(2), rows.getBoolean(3));
-                }
-                return INITIAL;
+                return rows.next() ? new Checkpoint(rows.getLong(1), rows.getString(2), rows.getBoolean(3)) : INITIAL;
             }
         } catch (SQLException failure) {
             throw new IllegalStateException("Could not read fan-out checkpoint", failure);
@@ -113,14 +110,14 @@ public final class PostgresFanoutStore implements FanoutStore {
         try (var connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);
             try {
-                if (!advanceCheckpoint(connection, publication, expected, nextCursor)) {
+                boolean advanced = advanceCheckpoint(connection, publication, expected, nextCursor);
+                if (advanced) {
+                    insertJobs(connection, pageJobs);
+                    connection.commit();
+                } else {
                     connection.rollback();
-                    return false;
                 }
-
-                insertJobs(connection, pageJobs);
-                connection.commit();
-                return true;
+                return advanced;
             } catch (SQLException failure) {
                 try {
                     connection.rollback();

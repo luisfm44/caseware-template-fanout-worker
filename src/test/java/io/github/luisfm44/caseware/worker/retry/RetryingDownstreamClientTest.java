@@ -12,6 +12,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Function;
+import java.util.stream.Stream;
 
 import io.github.luisfm44.caseware.worker.AdmissionController;
 import io.github.luisfm44.caseware.worker.FanoutWorker;
@@ -22,6 +23,8 @@ import io.github.luisfm44.caseware.worker.retry.DownstreamTransport.Outcome;
 import io.github.luisfm44.caseware.worker.retry.DownstreamTransport.Reply;
 import io.github.luisfm44.caseware.worker.retry.DownstreamTransport.Resolution;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static java.util.concurrent.CompletableFuture.failedFuture;
@@ -162,6 +165,92 @@ class RetryingDownstreamClientTest {
         assertThat(transport.reconciled).isEmpty();
         assertThat(delays).isEmpty();
         admission.tryAcquire(NEXT).orElseThrow().close();
+    }
+
+    @Test
+    void retriesAConfirmedTransientFailureUsingTheDefaultScheduler() throws Exception {
+        var scheduledWorker = new FanoutWorker(admission, new RetryingDownstreamClient(transport));
+        transport.submissions.add(id -> completedFuture(new Reply(Outcome.TRANSIENT_FAILURE)));
+        transport.submissions.add(id -> completedFuture(new Reply(Outcome.APPLIED)));
+
+        scheduledWorker.tryStart(OPERATION).orElseThrow().get(5, SECONDS);
+
+        assertThat(transport.submitted).containsExactly(OPERATION, OPERATION);
+        assertThat(transport.reconciled).isEmpty();
+        admission.tryAcquire(NEXT).orElseThrow().close();
+    }
+
+    @ParameterizedTest
+    @MethodSource("unusableSubmissions")
+    void reconcilesSubmissionsWithoutAUsableReply(Function<OperationId, CompletionStage<Reply>> submit)
+            throws Exception {
+        transport.submissions.add(submit);
+        transport.reconciliations.add(id -> completedFuture(Resolution.APPLIED));
+
+        worker.tryStart(OPERATION).orElseThrow().get(5, SECONDS);
+
+        assertThat(transport.submitted).containsExactly(OPERATION);
+        assertThat(transport.reconciled).containsExactly(OPERATION);
+        assertThat(delays).isEmpty();
+        admission.tryAcquire(NEXT).orElseThrow().close();
+    }
+
+    static Stream<Function<OperationId, CompletionStage<Reply>>> unusableSubmissions() {
+        return Stream.of(
+                id -> {
+                    throw new IllegalStateException("Transport threw before providing a reply stage");
+                },
+                id -> null,
+                id -> completedFuture(null));
+    }
+
+    @Test
+    void surfacesARejectionConfirmedByStatusWithoutResubmitting() {
+        transport.submissions.add(id -> completedFuture(new Reply(Outcome.UNCONFIRMED)));
+        transport.reconciliations.add(id -> completedFuture(Resolution.REJECTED));
+
+        var failure = assertInstanceOf(DownstreamFailure.class,
+                failureCause(worker.tryStart(OPERATION).orElseThrow()));
+
+        assertThat(failure.reason()).isEqualTo(DownstreamFailure.Reason.REJECTED);
+        assertThat(failure.attempts()).isEqualTo(1);
+        assertThat(failure.lastOutcome()).isEqualTo(Outcome.REJECTED);
+        assertThat(transport.submitted).containsExactly(OPERATION);
+        assertThat(transport.reconciled).containsExactly(OPERATION);
+        assertThat(delays).isEmpty();
+        admission.tryAcquire(NEXT).orElseThrow().close();
+    }
+
+    @ParameterizedTest
+    @MethodSource("nonAuthoritativeLookups")
+    void keepsThePermitWhenTheStatusAdapterCannotConfirmAnOutcome(
+            Function<OperationId, CompletionStage<Resolution>> lookup) {
+        transport.submissions.add(id -> completedFuture(new Reply(Outcome.UNCONFIRMED)));
+        transport.reconciliations.add(lookup);
+
+        var result = worker.tryStart(OPERATION).orElseThrow();
+
+        assertThat(result).isNotDone();
+        assertThat(worker.tryStart(NEXT)).isEmpty();
+        assertThat(transport.submitted).containsExactly(OPERATION);
+        assertThat(transport.reconciled).containsExactly(OPERATION);
+        assertThat(delays).isEmpty();
+    }
+
+    static Stream<Function<OperationId, CompletionStage<Resolution>>> nonAuthoritativeLookups() {
+        return Stream.of(
+                id -> failedFuture(new IllegalStateException("Status temporarily unavailable")),
+                id -> completedFuture(null),
+                id -> {
+                    throw new IllegalStateException("Status lookup could not start");
+                });
+    }
+
+    @Test
+    void rejectsNegativeRetryAfter() {
+        assertThat(assertThrows(IllegalArgumentException.class,
+                () -> new Reply(Outcome.THROTTLED, Duration.ofMillis(-1))))
+                .hasMessage("retryAfter must be non-negative");
     }
 
     private FanoutWorker workerUsing(AdmissionController controller) {

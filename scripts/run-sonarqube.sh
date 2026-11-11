@@ -125,11 +125,11 @@ start_disposable_sonar() {
 mode='configured server'
 admin_password=''
 if [[ "$prove_gate_failure" == true ]]; then
-    mode='isolated failure probe (100% coverage)'
+    mode='isolated unit-only failure probe (100% coverage floor)'
     start_disposable_sonar 100
 elif [[ -z "${SONAR_HOST_URL:-}" && -z "${SONAR_TOKEN:-}" ]]; then
-    mode='disposable Community Build (50% coverage floor)'
-    start_disposable_sonar 50
+    mode='disposable Community Build (100% coverage floor)'
+    start_disposable_sonar 100
 else
     [[ -n "${SONAR_HOST_URL:-}" && -n "${SONAR_TOKEN:-}" ]] || fail 'Set both SONAR_HOST_URL and SONAR_TOKEN, or leave both unset.'
     git_ref=${GITHUB_REF:-$(git symbolic-ref --quiet HEAD || true)}

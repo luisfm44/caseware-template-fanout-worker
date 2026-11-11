@@ -1,9 +1,11 @@
 package io.github.luisfm44.caseware.worker.planning;
 
+import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import javax.sql.DataSource;
 
 import io.github.luisfm44.caseware.worker.OperationId;
 import io.github.luisfm44.caseware.worker.planning.EngagementSource.Engagement;
@@ -16,6 +18,10 @@ import org.postgresql.ds.PGSimpleDataSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.AdditionalAnswers.delegatesTo;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class PublicationFanoutIT {
 
@@ -116,6 +122,173 @@ class PublicationFanoutIT {
 
         assertThat(otherStore.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(1, "after-1", false));
         assertThat(storedJobs(dataSource)).containsExactly(committedJob);
+
+        var previous = otherStore.checkpoint(PUBLICATION);
+        assertThat(firstStore.commitPage(PUBLICATION, previous, List.of(staleJob), "after-2")).isTrue();
+        assertThat(otherStore.commitPage(PUBLICATION, previous, List.of(expectedJobs().get(2)), null)).isFalse();
+
+        assertThat(otherStore.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(2, "after-2", false));
+        assertThat(storedJobs(dataSource)).containsExactlyInAnyOrder(committedJob, staleJob);
+    }
+
+    @Test
+    void rereadsTheCheckpointAfterAnotherPlannerCommitsFirst() throws SQLException {
+        var store = new PostgresFanoutStore(dataSource());
+        var competingPlanner = new PublicationFanout(source(new ArrayList<>()), store, PAGE_SIZE);
+        var requestedCursors = new ArrayList<String>();
+        var pages = source(requestedCursors);
+        EngagementSource sourceWithConcurrentCommit = (publication, cursor, limit) -> {
+            var page = pages.fetch(publication, cursor, limit);
+            if (cursor == null) {
+                assertThat(competingPlanner.planNextPage(publication)).isTrue();
+            }
+            return page;
+        };
+
+        new PublicationFanout(sourceWithConcurrentCommit, store, PAGE_SIZE).plan(PUBLICATION);
+
+        assertThat(requestedCursors).containsExactly(null, "after-2", "after-4");
+        assertThat(store.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(3, null, true));
+        assertThat(store.listJobs(PUBLICATION, 10)).containsExactlyElementsOf(expectedJobs());
+    }
+
+    @Test
+    void rejectsOversizedPagesBeforeRecordingAnyJobs() throws SQLException {
+        var store = new PostgresFanoutStore(dataSource());
+        var planner = new PublicationFanout((publication, cursor, limit) -> new Page(ELIGIBLE, null), store, PAGE_SIZE);
+
+        assertThatThrownBy(() -> planner.planNextPage(PUBLICATION))
+                .isInstanceOf(IllegalStateException.class).hasMessage("Engagement source exceeded the page size");
+
+        assertThat(store.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(0, null, false));
+        assertThat(store.listJobs(PUBLICATION, 10)).isEmpty();
+    }
+
+    @Test
+    void rejectsRepeatedCursorsWithoutAdvancingTheCheckpoint() throws SQLException {
+        var store = new PostgresFanoutStore(dataSource());
+        new PublicationFanout(source(new ArrayList<>()), store, PAGE_SIZE).planNextPage(PUBLICATION);
+        var planner = new PublicationFanout(
+                (publication, cursor, limit) -> new Page(List.of(ELIGIBLE.get(2)), cursor), store, PAGE_SIZE);
+
+        assertThatThrownBy(() -> planner.planNextPage(PUBLICATION))
+                .isInstanceOf(IllegalStateException.class).hasMessage("Engagement source returned the current cursor");
+
+        assertThat(store.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(1, "after-2", false));
+        assertThat(store.listJobs(PUBLICATION, 10)).containsExactlyElementsOf(expectedJobs().subList(0, 2));
+    }
+
+    @Test
+    void listsOnlyTheRequestedPublicationsJobsInStableBoundedOrder() throws SQLException {
+        var store = new PostgresFanoutStore(dataSource());
+        var firstRevision = new OperationId(PUBLICATION.firmId(), "engagement-1", PUBLICATION.publicationId(), "revision-1");
+        var nextRevision = new OperationId(PUBLICATION.firmId(), "engagement-1", PUBLICATION.publicationId(), "revision-2");
+        var otherEngagement = expectedJobs().get(1);
+        var otherFirm = new Publication("firm-b", PUBLICATION.publicationId());
+        var otherPublication = new Publication(PUBLICATION.firmId(), "publication-43");
+
+        assertThat(store.commitPage(PUBLICATION, store.checkpoint(PUBLICATION),
+                List.of(otherEngagement, nextRevision, firstRevision), null)).isTrue();
+        assertThat(store.commitPage(otherFirm, store.checkpoint(otherFirm), List.of(
+                new OperationId(otherFirm.firmId(), "engagement-0", otherFirm.publicationId(), "revision-1")), null)).isTrue();
+        assertThat(store.commitPage(otherPublication, store.checkpoint(otherPublication), List.of(
+                new OperationId(otherPublication.firmId(), "engagement-0", otherPublication.publicationId(), "revision-1")), null)).isTrue();
+
+        assertThat(store.listJobs(PUBLICATION, 2)).containsExactly(firstRevision, nextRevision);
+        assertThat(store.listJobs(PUBLICATION, 10)).containsExactly(firstRevision, nextRevision, otherEngagement);
+        assertThatThrownBy(() -> store.listJobs(PUBLICATION, 0))
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("limit must be positive");
+    }
+
+    @Test
+    void rejectsJobsThatBelongToAnotherFirmOrPublication() throws SQLException {
+        var store = new PostgresFanoutStore(dataSource());
+        var checkpoint = store.checkpoint(PUBLICATION);
+        var otherFirm = new OperationId("firm-b", "engagement-1", PUBLICATION.publicationId(), "revision-1");
+        var otherPublication = new OperationId(PUBLICATION.firmId(), "engagement-1", "publication-43", "revision-1");
+
+        for (var foreignJob : List.of(otherFirm, otherPublication)) {
+            assertThatThrownBy(() -> store.commitPage(PUBLICATION, checkpoint,
+                    List.of(expectedJobs().getFirst(), foreignJob), null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("Every job must belong to the publication being planned");
+        }
+
+        assertThat(store.checkpoint(PUBLICATION)).isEqualTo(checkpoint);
+        assertThat(store.listJobs(PUBLICATION, 10)).isEmpty();
+    }
+
+    @Test
+    void treatsAnEmptyFinalPageAsCompleteAndRejectsFurtherWrites() throws SQLException {
+        var store = new PostgresFanoutStore(dataSource());
+        var planner = new PublicationFanout((publication, cursor, limit) -> new Page(List.of(), null), store, PAGE_SIZE);
+
+        planner.plan(PUBLICATION);
+
+        var checkpoint = store.checkpoint(PUBLICATION);
+        assertThat(checkpoint).isEqualTo(new Checkpoint(1, null, true));
+        assertThat(store.commitPage(PUBLICATION, checkpoint, List.of(expectedJobs().getFirst()), null)).isFalse();
+        assertThat(store.listJobs(PUBLICATION, 10)).isEmpty();
+    }
+
+    @Test
+    void reportsWhenTheConfiguredSchemaCannotBeInitialized() throws SQLException {
+        var absentSchema = dataSource();
+        absentSchema.setCurrentSchema(schema + "_absent");
+
+        assertThatThrownBy(() -> new PostgresFanoutStore(absentSchema))
+                .isInstanceOf(IllegalStateException.class).hasMessage("Could not initialize fan-out tables")
+                .hasRootCauseInstanceOf(SQLException.class);
+    }
+
+    @Test
+    void distinguishesCheckpointAndJobQueryFailuresFromAnEmptyResult() throws SQLException {
+        var dataSource = dataSource();
+        var store = new PostgresFanoutStore(dataSource);
+        execute(dataSource, "ALTER TABLE fanout_checkpoint RENAME TO unavailable_checkpoint");
+        execute(dataSource, "ALTER TABLE fanout_job RENAME TO unavailable_job");
+
+        assertThatThrownBy(() -> store.checkpoint(PUBLICATION))
+                .isInstanceOf(IllegalStateException.class).hasMessage("Could not read fan-out checkpoint")
+                .hasRootCauseInstanceOf(SQLException.class);
+        assertThatThrownBy(() -> store.listJobs(PUBLICATION, 10))
+                .isInstanceOf(IllegalStateException.class).hasMessage("Could not list planned fan-out jobs")
+                .hasRootCauseInstanceOf(SQLException.class);
+    }
+
+    @Test
+    void preservesTheWriteFailureWhenTheDatabaseConnectionDropsDuringRollback() throws SQLException {
+        var dataSource = dataSource();
+        var storeWithWorkingConnection = new PostgresFanoutStore(dataSource);
+        execute(dataSource, """
+                ALTER TABLE fanout_job ADD CONSTRAINT reject_first_engagement
+                    CHECK (engagement_id <> 'engagement-1')
+                """);
+        var checkpoint = storeWithWorkingConnection.checkpoint(PUBLICATION);
+        var interruptedDataSource = mock(DataSource.class);
+        try (var connection = dataSource.getConnection()) {
+            var interruptedConnection = mock(Connection.class, delegatesTo(connection));
+            doAnswer(invocation -> {
+                connection.close();
+                connection.rollback();
+                return null;
+            }).when(interruptedConnection).rollback();
+            when(interruptedDataSource.getConnection()).thenReturn(dataSource.getConnection(), interruptedConnection);
+            var store = new PostgresFanoutStore(interruptedDataSource);
+
+            assertThatThrownBy(() -> store.commitPage(PUBLICATION, checkpoint, List.of(expectedJobs().getFirst()), null))
+                    .isInstanceOf(IllegalStateException.class).hasMessage("Could not commit fan-out page")
+                    .satisfies(failure -> {
+                        var writeFailure = (SQLException) failure.getCause();
+                        assertThat(writeFailure.getSQLState()).isEqualTo("23514");
+                        assertThat(writeFailure.getSuppressed()).singleElement()
+                                .isInstanceOfSatisfying(SQLException.class,
+                                        rollbackFailure -> assertThat(rollbackFailure.getSQLState()).isEqualTo("08003"));
+                    });
+        }
+
+        assertThat(storeWithWorkingConnection.checkpoint(PUBLICATION)).isEqualTo(checkpoint);
+        assertThat(storeWithWorkingConnection.listJobs(PUBLICATION, 10)).isEmpty();
     }
 
     private PGSimpleDataSource dataSource() {

@@ -6,9 +6,9 @@ The [Verify and scan workflow](../.github/workflows/ci.yml) runs the `quality` j
 
 The Maven `coverage` profile uses JaCoCo 0.8.16 to collect execution data from Surefire and Failsafe. With the `postgres-integration` profile active, the XML report includes both the unit and PostgreSQL integration tests. Use `clean verify` so the report contains only execution data from the current build. SonarScanner for Maven 5.8.0.7211 imports the XML.
 
-The default job starts SonarQube Community Build 26.11 on the runner, bound to loopback. It uses a disposable private project, a temporary project analysis token and a Quality Gate with a **50% minimum for overall coverage**. The runner removes the container and its data after the scan. The gate measures coverage of production code exercised by the two test suites. The separately executed demo is a smoke test.
+The coverage build checks that JaCoCo reports zero missed production lines and branches. The default quality job starts SonarQube Community Build 26.11 on the runner, bound to loopback. It uses a disposable private project, a temporary project analysis token and a Quality Gate with a **100% minimum for overall coverage**. The runner removes the container and its data after the scan.
 
-The initial baseline from 13 tests was **52.0% overall coverage**, with **54.4% line coverage** and **45.9% branch coverage**. The initial floor leaves room for incremental improvement while catching regressions against that baseline.
+The initial baseline was **52.0% overall coverage**. The Issue #12 suite has 48 tests and covers **353 of 353 lines** and **111 of 111 branches** in JaCoCo. SonarQube reports **100% overall coverage**. The added tests exercise the demo, worker validation, downstream recovery and PostgreSQL success and failure paths.
 
 Open the workflow's **Summary** for the gate decision and coverage. Download the **sonarqube-quality** artifact for the JaCoCo XML and HTML, gate conditions, measured values and the available SonarQube findings. This mode publishes a snapshot per run. A persistent server provides a dashboard and historical trends.
 
@@ -33,10 +33,17 @@ export FANOUT_BUILD_DIRECTORY=/private/tmp/caseware-fanout-target
 bash scripts/run-sonarqube.sh
 ```
 
-To verify failure propagation, select **prove_gate_failure** when manually running **Verify and scan**, or run `bash scripts/run-sonarqube.sh --prove-gate-failure` after building coverage locally. The probe creates its own isolated project with a 100% overall coverage gate. The scanner exits nonzero when the gate fails and the reports show the failing condition.
+To verify failure propagation, select **prove_gate_failure** when manually running **Verify and scan**. The probe creates its own isolated project and analyzes a fresh unit-only coverage report under the same 100% overall coverage gate. It bypasses the Maven coverage check for that run so the SonarQube gate makes the decision. The scanner exits nonzero and the reports show the failing condition.
+
+To reproduce the probe locally:
+
+```sh
+./mvnw -Pcoverage -Dfanout.coverage.check.skip=true -DfailIfNoTests=true clean verify
+bash scripts/run-sonarqube.sh --prove-gate-failure
+```
 
 ## Connect an existing SonarQube server
 
-Configure the project and Quality Gate on an instance reachable from the GitHub runner. In GitHub Actions, set the repository variable `SONAR_HOST_URL` and the repository secret `SONAR_TOKEN` to a project analysis token. The optional repository variable `SONAR_PROJECT_KEY` selects the project key. It defaults to `caseware-template-fanout-worker`. The workflow uses these settings on `main`. The server controls its own gate thresholds and dashboard access.
+Configure the project with a 100% overall coverage gate on an instance reachable from the GitHub runner. In GitHub Actions, set the repository variable `SONAR_HOST_URL` and the repository secret `SONAR_TOKEN` to a project analysis token. The optional repository variable `SONAR_PROJECT_KEY` selects the project key. It defaults to `caseware-template-fanout-worker`. The workflow uses these settings on `main`. The server controls its own gate thresholds and dashboard access.
 
 [SonarQube Community Build CI integration](https://docs.sonarsource.com/sonarqube-community-build/devops-platform-integration/github-integration/adding-analysis-to-github-actions-workflow) · [JaCoCo Maven documentation](https://www.jacoco.org/jacoco/trunk/doc/maven.html)

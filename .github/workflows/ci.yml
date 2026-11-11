@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       prove_gate_failure:
-        description: Run an isolated 100% coverage gate to verify that a failed gate fails the job
+        description: Analyze unit-only coverage in isolation to verify that the 100% gate fails the job
         required: false
         default: false
         type: boolean
@@ -117,12 +117,18 @@ jobs:
           distribution: temurin
           java-version: '25'
           cache: maven
-      - name: Build and collect unit and PostgreSQL coverage
+      - name: Build and collect JaCoCo coverage
         env:
           FANOUT_DB_URL: jdbc:postgresql://127.0.0.1:${{ job.services.postgres.ports[5432] }}/fanout
           FANOUT_DB_USER: fanout
           FANOUT_DB_PASSWORD: fanout-ci
-        run: ./mvnw --batch-mode --no-transfer-progress -Ppostgres-integration,coverage -DfailIfNoTests=true clean verify
+          PROVE_GATE_FAILURE: ${{ inputs.prove_gate_failure || false }}
+        run: |
+          if [[ "$PROVE_GATE_FAILURE" == true ]]; then
+            ./mvnw --batch-mode --no-transfer-progress -Pcoverage -Dfanout.coverage.check.skip=true -DfailIfNoTests=true clean verify
+          else
+            ./mvnw --batch-mode --no-transfer-progress -Ppostgres-integration,coverage -DfailIfNoTests=true clean verify
+          fi
       - name: Analyze Java and enforce the SonarQube Quality Gate
         env:
           SONAR_HOST_URL: ${{ github.ref == 'refs/heads/main' && vars.SONAR_HOST_URL || '' }}
