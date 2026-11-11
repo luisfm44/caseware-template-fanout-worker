@@ -55,6 +55,18 @@ The timeout test starts three operations, times out the caller's future for one 
 
 The semaphore shares capacity within a single JVM. A deployment with separate worker processes needs a shared admission authority. A real downstream client must reconcile an ambiguous transport timeout by operation ID before reporting a terminal outcome. See the [system architecture](architecture.pdf) for the broader design.
 
+## Durable publication planning
+
+[`PublicationFanout`][planner] asks an [`EngagementSource`][source] for one bounded page of eligible engagements at a time. The source keeps each publication's membership, revisions and cursor order stable across restarts. The planner converts each engagement to the same `OperationId` used for downstream execution.
+
+[`PostgresFanoutStore`][store] commits the page in a single transaction.
+
+1. Check that the publication's stored cursor and page count still match the ones used to read the page. Stage the next cursor, or mark planning complete for the final page.
+2. Insert the jobs into `fanout_job`. Its primary key is the four fields of `OperationId`. A repeated key leaves the existing job intact.
+3. Commit the jobs and the update to `fanout_checkpoint` together. If any job insert fails, PostgreSQL rolls back the entire page. If another planner moved the checkpoint, the caller reads it again before planning another page.
+
+After an interruption, a new planner resumes from the last committed cursor. Replaying a fully planned publication returns immediately. Planning records jobs for downstream execution, which continues to use the separate admission and worker contracts above.
+
 [operation]: ../src/main/java/io/github/luisfm44/caseware/worker/OperationId.java
 [worker]: ../src/main/java/io/github/luisfm44/caseware/worker/FanoutWorker.java
 [admission]: ../src/main/java/io/github/luisfm44/caseware/worker/AdmissionController.java
@@ -64,3 +76,6 @@ The semaphore shares capacity within a single JVM. A deployment with separate wo
 [fake]: ../src/test/java/io/github/luisfm44/caseware/worker/FakeDownstreamClient.java
 [test]: ../src/test/java/io/github/luisfm44/caseware/worker/SharedAdmissionTest.java
 [boot]: ../src/main/java/io/github/luisfm44/caseware/worker/TemplateFanoutWorkerApplication.java
+[planner]: ../src/main/java/io/github/luisfm44/caseware/worker/planning/PublicationFanout.java
+[source]: ../src/main/java/io/github/luisfm44/caseware/worker/planning/EngagementSource.java
+[store]: ../src/main/java/io/github/luisfm44/caseware/worker/planning/PostgresFanoutStore.java
