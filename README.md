@@ -2,7 +2,14 @@
 
 Caseware Staff Java take-home. The worker starts operations for a template publication across engagements using a shared downstream capacity pool. The first checkpoint exercises two workers in one JVM against a simulated downstream.
 
-[Architecture and diagrams](docs/architecture.pdf) · [AWS cost model with editable assumptions](docs/aws-cost-model.xlsx)
+## Worker architecture
+
+Two logical workers share one admission controller and one simulated downstream in the Issue #1 tests. The controller admits up to three concurrent operations across both workers. If a caller times out, its operation keeps the slot until the downstream confirms it has ended.
+
+<!-- Image exported from the Mermaid diagram in docs/worker-architecture.md. -->
+![Two workers share one admission controller with three slots and dispatch admitted operations to the same simulated downstream.](docs/worker-architecture.svg)
+
+[Worker components and operation lifecycle](docs/worker-architecture.md) · [System architecture and diagrams](docs/architecture.pdf) · [AWS cost model with editable assumptions](docs/aws-cost-model.xlsx)
 
 ## Run locally
 
