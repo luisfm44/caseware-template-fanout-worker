@@ -6,15 +6,15 @@ The repository implements the worker contracts for admission, durable planning, 
 
 Two logical workers acquire permits from one in-memory semaphore. A caller can time out or cancel its own future while the worker retains the permit until the downstream reaches a confirmed terminal state. A full pool returns immediately so the caller can decide when to try again. The tests verify a peak of three operations across both workers and prove that a caller timeout leaves the occupied slot reserved. [Shared admission tests][admission-test]
 
-The semaphore coordinates workers in a single JVM. Separate worker processes would need a shared admission authority. The three-slot test configuration demonstrates the invariant with a small workload.
+The semaphore coordinates workers in the single-JVM demo. The durable worker profile uses PostgreSQL to coordinate independent processes.
 
 ## Durable planning · Issue [#2][issue-2]
 
 The planner converts each bounded page of eligible engagements into jobs keyed by `OperationId`, which combines firm, engagement, publication, and engagement revision. PostgreSQL commits the page's jobs and checkpoint together. A checkpoint comparison rejects a stale writer, and the job key makes page replay safe. The engagement source must preserve membership, revision, order, and cursor meaning for the life of a publication. [PostgreSQL integration tests][planning-test]
 
-`PostgresFanoutStore` uses JDBC directly. The SQL expresses the checkpoint comparison and unique job key, and the store commits or rolls back the page explicitly. The current schema has two tables. An ORM such as Hibernate would provide entity mapping if the model grows to include more relationships and entity lifecycles.
+`PostgresFanoutStore` uses JDBC directly. The SQL expresses the checkpoint comparison and unique job key, and the store commits or rolls back the page explicitly. The planning schema starts with two tables. An ORM such as Hibernate would provide entity mapping if the model grows to include more relationships and entity lifecycles.
 
-A fresh planner resumes from the last committed cursor after interruption. The transaction boundary covers planning data. The deployment still needs a consumer to claim persisted jobs and pass their operation IDs to the execution path.
+A fresh planner resumes from the last committed cursor after interruption. The transaction boundary covers planning data. The durable worker profile claims the persisted jobs for execution.
 
 ## Downstream reconciliation · Issue [#3][issue-3]
 
@@ -28,9 +28,18 @@ The Spring Boot `demo` profile connects the planning and execution paths in one 
 
 The simulator holds submissions under test control so the demo can measure overlap. For one operation it applies the effect and drops the reply. The worker uses the same key to reconcile the applied effect, and the demo reports dispatch attempts and lookups alongside the effect count and observed peak. The run removes its temporary schema. [Run the demo](../README.md#postgresql-integration-tests-and-executable-demo) · [Smoke workflow](../.github/workflows/demo.yml)
 
-## Deployment and follow-up
+## Durable consumption and shared capacity
 
-The demo reads the jobs for one publication and dispatches them in one process. A production deployment needs a durable consumer to claim jobs, a live downstream adapter with authoritative status and durable idempotency, and shared admission for multiple worker processes. The broader proposal also covers regional ownership and data residency. [System design](architecture.pdf)
+Issues [#15](https://github.com/luisfm44/caseware-template-fanout-worker/issues/15), [#16](https://github.com/luisfm44/caseware-template-fanout-worker/issues/16) and [#17](https://github.com/luisfm44/caseware-template-fanout-worker/issues/17).
+
+- The `postgres-worker` profile claims one eligible job per JVM using `FOR UPDATE SKIP LOCKED`. The claim expires independently of downstream capacity. Each write checks the current claim token. A new claimant reconciles a recorded attempt before it can send again.
+- A PostgreSQL capacity row serializes admissions for the schema. Authorizing a send increments the durable submission count and reserves one slot with a new attempt ID in the same transaction. This counts authorizations even when the process dies before sending. Three authorizations are allowed per job. Status queries have their own bounded backoff.
+- An attempt reserves a slot until the downstream confirms success, rejection or definitive no effect. One SQL update records the confirmed result and clears the reservation. A confirmed no-effect outcome releases the slot and schedules a new attempt if budget remains.
+- Track unresolved work from `fanout_job.authorized_at`. An alert can use `SELECT max(clock_timestamp() - authorized_at) FROM fanout_job WHERE attempt_id IS NOT NULL`. The elapsed time measures uncertainty and does not determine when a slot is safe to release.
+
+The HTTP adapter uses `POST /submit` and `POST /resolve` at the configured downstream origin. Both carry URL-encoded form fields `firmId`, `engagementId`, `publicationId`, `engagementRevision` and `attemptId`. A successful HTTP response has a plain-text outcome of `APPLIED`, `REJECTED`, `NOT_APPLIED` or `PENDING`, with optional `Retry-After` in seconds. Errors and unusable responses leave the outcome uncertain. The engagement manager owns durable idempotency by operation ID and validates the expected revision. A `NOT_APPLIED` response certifies that the attempt had no effect and is fenced against late execution. An absent record alone provides insufficient evidence.
+
+The [process integration test](../src/test/java/io/github/luisfm44/caseware/worker/durable/DurableWorkerProcessIT.java) uses a shared HTTP test downstream. The regional deployment needs a compatible engagement manager to enforce these guarantees and own the real capacity pool. [Regional architecture](system-architecture.md)
 
 ## Code quality · Issue [#8][issue-8]
 

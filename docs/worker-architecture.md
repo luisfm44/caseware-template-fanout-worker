@@ -52,7 +52,7 @@ flowchart TB
     class WORKERS,ADMIT,CLIENT,TRANSPORT execution
 ```
 
-The demo consumes its own stored job IDs in a disposable schema. Production integration calls for a durable job consumer, authoritative downstream status and shared admission across worker processes. [Proposed regional architecture](system-architecture.md) · [Worker design decisions](worker-design.md)
+The demo consumes its own stored job IDs in a disposable schema. The separate `postgres-worker` profile claims planned jobs and coordinates slots across JVMs in PostgreSQL. It reconciles uncertain attempts against an HTTP downstream. The process integration test exercises the protocol with a controlled server. Regional integration requires an engagement manager that supplies authoritative status and enforces idempotency and the real pool limit. [Proposed regional architecture](system-architecture.md) · [Worker design decisions](worker-design.md)
 
 ## Components
 

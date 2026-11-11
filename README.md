@@ -13,7 +13,7 @@ This Caseware Staff Java take-home demonstrates how to plan a template publicati
 
 ### Runnable Java application
 
-Planning commits each page of jobs with its checkpoint in PostgreSQL. The demo reads the persisted operation IDs and hands them to two workers in one JVM. The workers share three slots and reuse each operation ID for dispatch, retries and reconciliation against the simulated downstream.
+Planning commits each page of jobs with its checkpoint in PostgreSQL. The `demo` profile exercises two logical workers in one JVM. The `postgres-worker` profile consumes planned jobs durably and shares a downstream capacity pool between JVMs through PostgreSQL.
 
 <!-- Image exported from the Mermaid diagram in docs/worker-architecture.md. -->
 ![Spring Boot demo flow from a publication through PostgreSQL planning, shared admission, downstream execution and the JSON report.](docs/worker-architecture.svg)
@@ -71,7 +71,25 @@ The sample publication has seven synthetic engagements and a page size of two. A
 | `dispatchAttempts` | 7 | Calls to submit work to the downstream |
 | `reconciliations` | 1 | Status lookups after an ambiguous reply |
 
-The demo measures shared capacity within one JVM. PostgreSQL makes planning durable, while the simulator keeps the effect ledger in memory. Production integration requires a durable job consumer, admission shared across worker processes and a downstream that enforces operation IDs as idempotency keys and provides authoritative status. The retry budget is scoped to a worker execution. See the [design decisions](docs/worker-design.md) for the tradeoffs.
+The demo measures shared capacity within one JVM. Its simulator keeps the effect ledger in memory and its retry budget applies to one worker execution.
+
+### Durable worker and process recovery
+
+With PostgreSQL running, execute the cross-process regression.
+
+```sh
+./mvnw -Ppostgres-integration -Dit.test=DurableWorkerProcessIT verify
+```
+
+The test seeds planned jobs, starts two independent JVMs against a common HTTP test downstream, kills the first JVM and checks durable recovery, one effect per operation and a measured peak of one active operation. A separate scenario delivers a stale request after the downstream has fenced its attempt.
+
+To run a worker against a compatible downstream, first initialize the schema and insert jobs using the planner. Set `FANOUT_DB_URL`, `FANOUT_DB_USER`, `FANOUT_DB_PASSWORD` and `FANOUT_DOWNSTREAM_URL`.
+
+```sh
+java -jar target/template-fanout-worker.jar --spring.profiles.active=postgres-worker --worker.capacity=3
+```
+
+All replicas for a pool use the same PostgreSQL schema, configured capacity and downstream. The [worker design](docs/worker-design.md#durable-consumption-and-shared-capacity) specifies the HTTP contract and the regional integration responsibilities.
 
 ## GitHub Actions
 
