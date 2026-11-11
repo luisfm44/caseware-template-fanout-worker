@@ -1,15 +1,15 @@
 # Template publish fan-out worker
 
-Caseware Staff Java take-home. The worker starts operations for a template publication across engagements using a shared downstream capacity pool. The first checkpoint exercises two workers in one JVM against a simulated downstream.
+Caseware Staff Java take-home. The worker plans template publication jobs for eligible engagements, persists progress in PostgreSQL and coordinates execution against a shared downstream capacity pool.
 
 ## Worker architecture
 
-Two logical workers share one admission controller and one simulated downstream in the Issue #1 tests. The controller admits up to three concurrent operations across both workers. If a caller times out, its operation keeps the slot until the downstream confirms it has ended.
+Planning commits each page of jobs with its checkpoint in PostgreSQL. Execution uses the same operation ID for admission, dispatch, retries and reconciliation. The tests exercise shared admission within one JVM and use a simulated downstream.
 
 <!-- Image exported from the Mermaid diagram in docs/worker-architecture.md. -->
-![Two workers share one admission controller with three slots and dispatch admitted operations to the same simulated downstream.](docs/worker-architecture.svg)
+![Caseware worker architecture showing PostgreSQL publication planning and downstream execution sharing an operation ID.](docs/worker-architecture.svg)
 
-[Worker components and operation lifecycle](docs/worker-architecture.md) · [System architecture and diagrams](docs/architecture.pdf) · [AWS cost model with editable assumptions](docs/aws-cost-model.xlsx)
+[Worker architecture and verification](docs/worker-architecture.md) · [Worker design decisions](docs/worker-design.md) · [System architecture and implementation appendix](docs/architecture.pdf) · [AWS cost model with editable assumptions](docs/aws-cost-model.xlsx)
 
 ## Run locally
 
@@ -40,7 +40,7 @@ If macOS file metadata interferes with a build on an external drive, add `-Dfano
 ## GitHub Actions
 
 - **Verify and scan** runs on pull requests, pushes to main, or manual dispatch. The `verify` job runs the unit and PostgreSQL integration tests, packages the executable JAR, and uploads both sets of test reports. The `security` job scans dependencies and tracked sources with Trivy. High or critical findings fail the scan.
-- **Run local deployment demo** is a manual smoke workflow on an isolated runner. It requires the implemented worker, builds the JAR and launches its demo profile against a simulated downstream. The profile must write a JSON report to the file supplied through `--demo.report`. The workflow checks that every submitted engagement completed, no side effect was duplicated, and peak concurrency respected the configured limit. A missing report or implementation fails the run.
+- **Run local deployment demo** is a manual smoke workflow on an isolated runner. The demo entry point is tracked in Issue #4. The workflow builds the JAR and launches its demo profile against a simulated downstream. The profile must write a JSON report to the file supplied through `--demo.report`. The workflow checks that every submitted engagement completed, no side effect was duplicated, and peak concurrency respected the configured limit. A missing report or implementation fails the run.
 
 ## Implementation checkpoints
 
@@ -48,3 +48,8 @@ If macOS file metadata interferes with a build on an external drive, add `-Dfano
 2. [Page through engagements and resume the fan-out after a crash](https://github.com/luisfm44/caseware-template-fanout-worker/issues/2). Replaying a publication preserves job identity.
 3. [Lose the response after a successful downstream effect](https://github.com/luisfm44/caseware-template-fanout-worker/issues/3). Retry with the same operation key or reconcile the recorded outcome.
 4. [Verify the executable artifact and record implementation tradeoffs and the actual use of AI in this README](https://github.com/luisfm44/caseware-template-fanout-worker/issues/4).
+
+### Follow-up issues
+
+- [SonarQube code quality analysis](https://github.com/luisfm44/caseware-template-fanout-worker/issues/8)
+- [GitHub Wiki for contributors and reviewers](https://github.com/luisfm44/caseware-template-fanout-worker/issues/9)
