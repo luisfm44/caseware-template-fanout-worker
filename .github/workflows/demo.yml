@@ -1,0 +1,37 @@
+name: Run local deployment demo
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Require the demo implementation
+        if: hashFiles('src/main/java/**/*.java') == ''
+        run: |
+          echo "::error::The scaffold has no worker to deploy yet."
+          exit 1
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Verify and package
+        run: ./mvnw --batch-mode --no-transfer-progress -DfailIfNoTests=true verify
+      - name: Run the demo workload with an in-process downstream
+        run: |
+          report="$RUNNER_TEMP/fanout-demo.json"
+          timeout 90s java -jar target/template-fanout-worker.jar --spring.profiles.active=demo --demo.report="$report"
+          jq -e '
+            ([.submitted, .completed, .duplicateEffects, .limit, .peakInFlight]
+              | all(.[]; type == "number" and . >= 0 and . == floor)) and
+            .submitted > 0 and .completed == .submitted and .duplicateEffects == 0 and
+            .limit > 0 and .peakInFlight > 0 and .peakInFlight <= .limit
+          ' "$report"
