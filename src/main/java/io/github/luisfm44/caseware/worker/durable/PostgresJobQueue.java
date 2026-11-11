@@ -51,7 +51,8 @@ public final class PostgresJobQueue {
                     initializeExecutionColumns(connection);
                 }
             }
-            if (lockCapacity(connection) != capacity) {
+            initializeFirmRotation(connection);
+            if (lockPool(connection).capacity() != capacity) {
                 throw new IllegalArgumentException("worker capacity differs from the capacity configured for this schema");
             }
             return null;
@@ -87,57 +88,118 @@ public final class PostgresJobQueue {
         }
     }
 
-    /** Prioritizes due reconciliation over fresh work so a full pool can recover its slots. */
-    public Optional<Claim> claimReady() {
-        return query(connection -> {
-            try (var statement = connection.prepareStatement("""
-                    WITH candidate AS (
-                        SELECT firm_id, publication_id, engagement_id, engagement_revision
-                        FROM fanout_job
-                        WHERE execution_state IN ('READY', 'SUBMITTED')
-                          AND available_at <= statement_timestamp()
-                          AND (claim_until IS NULL OR claim_until <= statement_timestamp())
-                        ORDER BY execution_state DESC, available_at, firm_id, publication_id, engagement_id, engagement_revision
-                        LIMIT 1
-                        FOR UPDATE SKIP LOCKED
-                    )
-                    UPDATE fanout_job AS job
-                    SET claim_token = ?, claim_until = clock_timestamp() + (? * INTERVAL '1 millisecond')
-                    FROM candidate
-                    WHERE (job.firm_id, job.publication_id, job.engagement_id, job.engagement_revision) =
-                          (candidate.firm_id, candidate.publication_id, candidate.engagement_id, candidate.engagement_revision)
-                    RETURNING job.firm_id, job.engagement_id, job.publication_id, job.engagement_revision,
-                              job.claim_token, job.attempt_id, job.submissions, job.poll_count
-                    """)) {
-                statement.setObject(1, UUID.randomUUID());
-                statement.setLong(2, claimMillis);
-                try (var rows = statement.executeQuery()) {
-                    return rows.next() ? Optional.of(readClaim(rows)) : Optional.empty();
-                }
-            }
-        });
+    private static void initializeFirmRotation(Connection connection) throws SQLException {
+        try (var statement = connection.createStatement()) {
+            statement.execute("""
+                    ALTER TABLE fanout_capacity
+                        ADD COLUMN IF NOT EXISTS last_firm_id TEXT NOT NULL DEFAULT ''
+                    """);
+            statement.execute("""
+                    CREATE INDEX IF NOT EXISTS fanout_job_ready_by_firm ON fanout_job
+                        (firm_id, available_at, publication_id, engagement_id, engagement_revision)
+                    WHERE execution_state = 'READY'
+                    """);
+        }
     }
 
-    /** Reserves capacity and records an authorized submission in the same transaction. */
-    public Optional<UUID> authorizeSubmission(Claim claim) {
-        return transaction(connection -> {
-            int capacity = lockCapacity(connection);
-            try (var statement = connection.prepareStatement("""
-                    UPDATE fanout_job
-                    SET execution_state = 'SUBMITTED', attempt_id = ?,
-                        authorized_at = clock_timestamp(), submissions = submissions + 1
-                    """ + CURRENT_CLAIM + """
-                      AND execution_state = 'READY' AND submissions < ?
-                      AND (SELECT count(*) FROM fanout_job WHERE attempt_id IS NOT NULL) < ?
-                    """)) {
-                var attemptId = UUID.randomUUID();
-                statement.setObject(1, attemptId);
-                bindClaim(statement, 2, claim);
-                statement.setInt(7, MAX_SUBMISSIONS);
-                statement.setInt(8, capacity);
-                return statement.executeUpdate() == 1 ? Optional.of(attemptId) : Optional.empty();
+    /** Reclaims due attempts first, then takes the next firm turn and reserves its slot atomically. */
+    public Optional<Claim> claimReady() {
+        var reconciliation = query(this::claimReconciliation);
+        return reconciliation.isPresent() ? reconciliation : transaction(this::claimNextFirm);
+    }
+
+    private Optional<Claim> claimReconciliation(Connection connection) throws SQLException {
+        try (var statement = connection.prepareStatement("""
+                WITH candidate AS (
+                    SELECT firm_id, publication_id, engagement_id, engagement_revision
+                    FROM fanout_job
+                    WHERE execution_state = 'SUBMITTED'
+                      AND available_at <= statement_timestamp()
+                      AND (claim_until IS NULL OR claim_until <= statement_timestamp())
+                    ORDER BY available_at, firm_id, publication_id, engagement_id, engagement_revision
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                )
+                UPDATE fanout_job AS job
+                SET claim_token = ?, claim_until = clock_timestamp() + (? * INTERVAL '1 millisecond')
+                FROM candidate
+                WHERE (job.firm_id, job.publication_id, job.engagement_id, job.engagement_revision) =
+                      (candidate.firm_id, candidate.publication_id, candidate.engagement_id, candidate.engagement_revision)
+                RETURNING job.firm_id, job.engagement_id, job.publication_id, job.engagement_revision,
+                          job.claim_token, job.attempt_id, job.submissions, job.poll_count
+                """)) {
+            statement.setObject(1, UUID.randomUUID());
+            statement.setLong(2, claimMillis);
+            try (var rows = statement.executeQuery()) {
+                return rows.next() ? Optional.of(readClaim(rows, true)) : Optional.empty();
             }
-        });
+        }
+    }
+
+    private Optional<Claim> claimNextFirm(Connection connection) throws SQLException {
+        var pool = lockPool(connection);
+        if (!hasCapacity(connection, pool.capacity())) {
+            return Optional.empty();
+        }
+
+        var next = reserveForNextFirm(connection, pool.lastFirm());
+        if (next.isEmpty() && !pool.lastFirm().isEmpty()) {
+            next = reserveForNextFirm(connection, "");
+        }
+        if (next.isPresent()) {
+            try (var statement = connection.prepareStatement("UPDATE fanout_capacity SET last_firm_id = ? WHERE singleton")) {
+                statement.setString(1, next.get().operationId().firmId());
+                statement.executeUpdate();
+            }
+        }
+        return next;
+    }
+
+    private static boolean hasCapacity(Connection connection, int capacity) throws SQLException {
+        try (var statement = connection.prepareStatement(
+                "SELECT count(*) < ? FROM fanout_job WHERE attempt_id IS NOT NULL")) {
+            statement.setInt(1, capacity);
+            try (var rows = statement.executeQuery()) {
+                rows.next();
+                return rows.getBoolean(1);
+            }
+        }
+    }
+
+    private Optional<Claim> reserveForNextFirm(Connection connection, String afterFirm) throws SQLException {
+        // The index lets each scan start at the cursor and stop at the first eligible job.
+        try (var statement = connection.prepareStatement("""
+                WITH candidate AS (
+                    SELECT firm_id, publication_id, engagement_id, engagement_revision
+                    FROM fanout_job
+                    WHERE execution_state = 'READY'
+                      AND firm_id > ?
+                      AND available_at <= statement_timestamp()
+                      AND (claim_until IS NULL OR claim_until <= statement_timestamp())
+                      AND submissions < ?
+                    ORDER BY firm_id, available_at, publication_id, engagement_id, engagement_revision
+                    LIMIT 1
+                    FOR UPDATE SKIP LOCKED
+                )
+                UPDATE fanout_job AS job
+                SET execution_state = 'SUBMITTED', attempt_id = ?, authorized_at = clock_timestamp(),
+                    submissions = job.submissions + 1,
+                    claim_token = ?, claim_until = clock_timestamp() + (? * INTERVAL '1 millisecond')
+                FROM candidate
+                WHERE (job.firm_id, job.publication_id, job.engagement_id, job.engagement_revision) =
+                      (candidate.firm_id, candidate.publication_id, candidate.engagement_id, candidate.engagement_revision)
+                RETURNING job.firm_id, job.engagement_id, job.publication_id, job.engagement_revision,
+                          job.claim_token, job.attempt_id, job.submissions, job.poll_count
+                """)) {
+            statement.setString(1, afterFirm);
+            statement.setInt(2, MAX_SUBMISSIONS);
+            statement.setObject(3, UUID.randomUUID());
+            statement.setObject(4, UUID.randomUUID());
+            statement.setLong(5, claimMillis);
+            try (var rows = statement.executeQuery()) {
+                return rows.next() ? Optional.of(readClaim(rows, false)) : Optional.empty();
+            }
+        }
     }
 
     /** Releases the claim for a later poll, retaining any uncertain attempt and its reservation. */
@@ -185,19 +247,22 @@ public final class PostgresJobQueue {
         });
     }
 
-    private static Claim readClaim(ResultSet row) throws SQLException {
+    private static Claim readClaim(ResultSet row, boolean reconciling) throws SQLException {
         var operation = new OperationId(row.getString(1), row.getString(2), row.getString(3), row.getString(4));
         return new Claim(operation, row.getObject(5, UUID.class), row.getObject(6, UUID.class),
-                row.getInt(7), row.getInt(8));
+                row.getInt(7), row.getInt(8), reconciling);
     }
 
-    private static int lockCapacity(Connection connection) throws SQLException {
+    private static Pool lockPool(Connection connection) throws SQLException {
         try (var statement = connection.createStatement();
-                var rows = statement.executeQuery("SELECT capacity FROM fanout_capacity WHERE singleton FOR UPDATE")) {
+                var rows = statement.executeQuery(
+                        "SELECT capacity, last_firm_id FROM fanout_capacity WHERE singleton FOR UPDATE")) {
             rows.next();
-            return rows.getInt(1);
+            return new Pool(rows.getInt(1), rows.getString(2));
         }
     }
+
+    private record Pool(int capacity, String lastFirm) {}
 
     private static void bindClaim(PreparedStatement statement, int start, Claim claim) throws SQLException {
         var operation = claim.operationId();
@@ -240,5 +305,6 @@ public final class PostgresJobQueue {
         T run(Connection connection) throws SQLException;
     }
 
-    public record Claim(OperationId operationId, UUID token, UUID attemptId, int submissions, int pollCount) {}
+    public record Claim(OperationId operationId, UUID token, UUID attemptId, int submissions, int pollCount,
+            boolean reconciling) {}
 }

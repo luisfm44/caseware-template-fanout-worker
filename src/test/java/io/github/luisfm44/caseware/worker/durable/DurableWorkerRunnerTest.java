@@ -19,7 +19,6 @@ import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockConstruction;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class DurableWorkerRunnerTest {
@@ -33,26 +32,14 @@ class DurableWorkerRunnerTest {
     private final AttemptTransport transport = mock(AttemptTransport.class);
 
     @Test
-    void defersUnadmittedWorkWithoutCallingDownstream() throws InterruptedException {
-        var claim = new Claim(OPERATION, CLAIM_TOKEN, null, 0, 0);
-        when(jobs.authorizeSubmission(claim)).thenReturn(Optional.empty());
-
-        DurableWorkerRunner.process(jobs, transport, claim, IDLE_DELAY);
-
-        verify(jobs).defer(claim, IDLE_DELAY);
-        verifyNoInteractions(transport);
-    }
-
-    @Test
     void settlesAnAuthorizedSubmissionAndDefersARecoveredPendingAttempt() throws Exception {
-        var fresh = new Claim(OPERATION, CLAIM_TOKEN, null, 0, 0);
-        var recovering = new Claim(OPERATION, CLAIM_TOKEN, ATTEMPT, 1, 1);
-        when(jobs.authorizeSubmission(fresh)).thenReturn(Optional.of(ATTEMPT));
+        var fresh = new Claim(OPERATION, CLAIM_TOKEN, ATTEMPT, 1, 0, false);
+        var recovering = new Claim(OPERATION, CLAIM_TOKEN, ATTEMPT, 1, 1, true);
         when(transport.submit(OPERATION, ATTEMPT)).thenReturn(new Reply(Outcome.APPLIED, Duration.ZERO));
         when(transport.resolve(OPERATION, ATTEMPT)).thenReturn(new Reply(Outcome.PENDING, Duration.ofSeconds(2)));
 
-        DurableWorkerRunner.process(jobs, transport, fresh, IDLE_DELAY);
-        DurableWorkerRunner.process(jobs, transport, recovering, IDLE_DELAY);
+        DurableWorkerRunner.process(jobs, transport, fresh);
+        DurableWorkerRunner.process(jobs, transport, recovering);
 
         verify(jobs).settle(fresh, ATTEMPT, Outcome.APPLIED, Duration.ofMillis(100));
         verify(jobs).defer(recovering, Duration.ofSeconds(2));
@@ -60,24 +47,23 @@ class DurableWorkerRunnerTest {
 
     @Test
     void settlesAuthoritativeNoEffectWithSubmissionBackoff() throws Exception {
-        var claim = new Claim(OPERATION, CLAIM_TOKEN, ATTEMPT, 3, 10);
+        var claim = new Claim(OPERATION, CLAIM_TOKEN, ATTEMPT, 3, 10, true);
         when(transport.resolve(OPERATION, ATTEMPT)).thenReturn(new Reply(Outcome.NOT_APPLIED, Duration.ZERO));
 
-        DurableWorkerRunner.process(jobs, transport, claim, IDLE_DELAY);
+        DurableWorkerRunner.process(jobs, transport, claim);
 
         verify(jobs).settle(claim, ATTEMPT, Outcome.NOT_APPLIED, Duration.ofMillis(400));
     }
 
     @Test
     void defersFailedSubmissionsAndCapsStatusBackoff() throws Exception {
-        var fresh = new Claim(OPERATION, CLAIM_TOKEN, null, 0, 0);
-        var recovering = new Claim(OPERATION, CLAIM_TOKEN, ATTEMPT, 1, 20);
-        when(jobs.authorizeSubmission(fresh)).thenReturn(Optional.of(ATTEMPT));
+        var fresh = new Claim(OPERATION, CLAIM_TOKEN, ATTEMPT, 1, 0, false);
+        var recovering = new Claim(OPERATION, CLAIM_TOKEN, ATTEMPT, 1, 20, true);
         when(transport.submit(OPERATION, ATTEMPT)).thenThrow(new IOException("lost reply"));
         when(transport.resolve(OPERATION, ATTEMPT)).thenThrow(new IOException("status unavailable"));
 
-        DurableWorkerRunner.process(jobs, transport, fresh, IDLE_DELAY);
-        DurableWorkerRunner.process(jobs, transport, recovering, IDLE_DELAY);
+        DurableWorkerRunner.process(jobs, transport, fresh);
+        DurableWorkerRunner.process(jobs, transport, recovering);
 
         verify(jobs).defer(fresh, Duration.ofMillis(100));
         verify(jobs).defer(recovering, Duration.ofMillis(3_200));
@@ -85,7 +71,7 @@ class DurableWorkerRunnerTest {
 
     @Test
     void waitsForWorkAndStopsWhenInterrupted() throws Exception {
-        var claim = new Claim(OPERATION, CLAIM_TOKEN, ATTEMPT, 1, 0);
+        var claim = new Claim(OPERATION, CLAIM_TOKEN, ATTEMPT, 1, 0, true);
         when(jobs.claimReady()).thenReturn(Optional.empty()).thenReturn(Optional.of(claim));
         when(transport.resolve(OPERATION, ATTEMPT)).thenReturn(new Reply(Outcome.APPLIED, Duration.ZERO));
         doAnswer(ignored -> {

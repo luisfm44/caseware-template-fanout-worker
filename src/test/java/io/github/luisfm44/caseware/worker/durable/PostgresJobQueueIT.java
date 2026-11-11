@@ -54,8 +54,9 @@ class PostgresJobQueueIT {
         for (int number = 1; number <= 3; number++) {
             var original = new PostgresJobQueue(database, 1, LEASE);
             var claim = original.claimReady().orElseThrow();
-            var attempt = original.authorizeSubmission(claim).orElseThrow();
-            assertThat(original.authorizeSubmission(claim)).isEmpty();
+            var attempt = claim.attemptId();
+            assertThat(claim.reconciling()).isFalse();
+            assertThat(original.claimReady()).isEmpty();
             assertThatThrownBy(() -> original.settle(claim, attempt, Outcome.PENDING, NOW))
                     .isInstanceOf(IllegalArgumentException.class);
             expireFirstClaim();
@@ -63,6 +64,7 @@ class PostgresJobQueueIT {
             var restarted = new PostgresJobQueue(database, 1, LEASE);
             var recovered = restarted.claimReady().orElseThrow();
             assertThat(recovered.operationId()).isEqualTo(FIRST);
+            assertThat(recovered.reconciling()).isTrue();
             assertThat(recovered.attemptId()).isEqualTo(attempt);
             assertThat(recovered.submissions()).isEqualTo(number);
             assertThat(recovered.token()).isNotEqualTo(claim.token());
@@ -77,22 +79,20 @@ class PostgresJobQueueIT {
     }
 
     @Test
-    void concurrentAuthorizationsCannotBothTakeTheLastSlot() throws Exception {
+    void concurrentClaimsCannotBothTakeTheLastSlot() throws Exception {
         seed(FIRST, SECOND);
         var firstWorker = new PostgresJobQueue(database, 1, LEASE);
         var secondWorker = new PostgresJobQueue(database, 1, LEASE);
-        var first = firstWorker.claimReady().orElseThrow();
-        var second = secondWorker.claimReady().orElseThrow();
         var start = new CyclicBarrier(2);
 
         try (var threads = Executors.newVirtualThreadPerTaskExecutor()) {
             var firstAuthorization = threads.submit(() -> {
                 start.await(5, TimeUnit.SECONDS);
-                return firstWorker.authorizeSubmission(first);
+                return firstWorker.claimReady();
             });
             var secondAuthorization = threads.submit(() -> {
                 start.await(5, TimeUnit.SECONDS);
-                return secondWorker.authorizeSubmission(second);
+                return secondWorker.claimReady();
             });
             var firstAttempt = firstAuthorization.get(5, TimeUnit.SECONDS);
             var secondAttempt = secondAuthorization.get(5, TimeUnit.SECONDS);
@@ -107,7 +107,7 @@ class PostgresJobQueueIT {
         seed(FIRST, SECOND);
         var firstWorker = new PostgresJobQueue(database, 1, LEASE);
         var first = firstWorker.claimReady().orElseThrow();
-        var attempt = firstWorker.authorizeSubmission(first).orElseThrow();
+        var attempt = first.attemptId();
 
         execute("ALTER TABLE fanout_job ADD CONSTRAINT fail_terminal_write CHECK (execution_state <> 'APPLIED')");
         assertThatThrownBy(() -> firstWorker.settle(first, attempt, Outcome.APPLIED, NOW))
@@ -115,10 +115,7 @@ class PostgresJobQueueIT {
         assertThat(state(FIRST)).isEqualTo("SUBMITTED");
 
         var secondWorker = new PostgresJobQueue(database, 1, LEASE);
-        var second = secondWorker.claimReady().orElseThrow();
-        assertThat(second.operationId()).isEqualTo(SECOND);
-        assertThat(secondWorker.authorizeSubmission(second)).isEmpty();
-        secondWorker.defer(second, NOW);
+        assertThat(secondWorker.claimReady()).isEmpty();
         execute("ALTER TABLE fanout_job DROP CONSTRAINT fail_terminal_write");
         expireFirstClaim();
 
@@ -130,12 +127,67 @@ class PostgresJobQueueIT {
         var thirdWorker = new PostgresJobQueue(database, 1, LEASE);
         var next = thirdWorker.claimReady().orElseThrow();
         assertThat(next.operationId()).isEqualTo(SECOND);
-        var nextAttempt = thirdWorker.authorizeSubmission(next).orElseThrow();
+        var nextAttempt = next.attemptId();
         firstWorker.settle(first, attempt, Outcome.REJECTED, NOW);
         assertThat(state(FIRST)).isEqualTo("APPLIED");
         thirdWorker.settle(next, nextAttempt, Outcome.REJECTED, NOW);
         assertThat(state(SECOND)).isEqualTo("REJECTED");
         assertThat(thirdWorker.claimReady()).isEmpty();
+    }
+
+    @Test
+    void rotatesAcrossReadyFirmsAndSkipsAnIneligibleRetry() throws SQLException {
+        var a = new Publication("firm-a", "release");
+        var b = new Publication("firm-b", "release");
+        var c = new Publication("firm-c", "release");
+        var a1 = operation(a, "a1");
+        var a2 = operation(a, "a2");
+        var b1 = operation(b, "b1");
+        var c1 = operation(c, "c1");
+
+        new PostgresFanoutStore(database);
+        var queue = new PostgresJobQueue(database, 1, LEASE);
+        assertThat(queue.claimReady()).isEmpty();
+        seed(a, a1, a2);
+        seed(b, b1);
+        seed(c, c1);
+        var first = queue.claimReady().orElseThrow();
+        assertThat(first.operationId()).isEqualTo(a1);
+        queue.settle(first, first.attemptId(), Outcome.NOT_APPLIED, Duration.ofHours(1));
+
+        var restarted = new PostgresJobQueue(database, 1, LEASE);
+        for (var expected : List.of(b1, c1, a2)) {
+            var claim = restarted.claimReady().orElseThrow();
+            assertThat(claim.operationId()).isEqualTo(expected);
+            restarted.settle(claim, claim.attemptId(), Outcome.APPLIED, NOW);
+        }
+
+        assertThat(restarted.claimReady()).isEmpty();
+        execute("UPDATE fanout_job SET available_at = clock_timestamp() WHERE engagement_id = 'a1'");
+        var retry = restarted.claimReady().orElseThrow();
+        assertThat(retry.operationId()).isEqualTo(a1);
+        assertThat(retry.attemptId()).isNotEqualTo(first.attemptId());
+        assertThat(retry.submissions()).isEqualTo(2);
+    }
+
+    @Test
+    void upgradesAnExistingPoolWithoutLosingItsReservedAttempt() throws SQLException {
+        seed(FIRST, SECOND);
+        var original = new PostgresJobQueue(database, 1, LEASE);
+        var claim = original.claimReady().orElseThrow();
+        execute("DROP INDEX fanout_job_ready_by_firm");
+        execute("ALTER TABLE fanout_capacity DROP COLUMN last_firm_id");
+
+        var upgraded = new PostgresJobQueue(database, 1, LEASE);
+        assertThat(upgraded.claimReady()).isEmpty();
+        expireFirstClaim();
+
+        var recovery = upgraded.claimReady().orElseThrow();
+        assertThat(recovery.attemptId()).isEqualTo(claim.attemptId());
+        assertThat(recovery.submissions()).isEqualTo(1);
+        assertThat(recovery.reconciling()).isTrue();
+        upgraded.settle(recovery, recovery.attemptId(), Outcome.APPLIED, NOW);
+        assertThat(upgraded.claimReady().orElseThrow().operationId()).isEqualTo(SECOND);
     }
 
     @Test
@@ -167,8 +219,12 @@ class PostgresJobQueueIT {
     }
 
     private void seed(OperationId... jobs) {
+        seed(PUBLICATION, jobs);
+    }
+
+    private void seed(Publication publication, OperationId... jobs) {
         var planning = new PostgresFanoutStore(database);
-        assertThat(planning.commitPage(PUBLICATION, planning.checkpoint(PUBLICATION), List.of(jobs), null)).isTrue();
+        assertThat(planning.commitPage(publication, planning.checkpoint(publication), List.of(jobs), null)).isTrue();
     }
 
     private void expireFirstClaim() throws SQLException {
@@ -202,6 +258,10 @@ class PostgresJobQueueIT {
     }
 
     private static OperationId operation(String engagement) {
-        return new OperationId(PUBLICATION.firmId(), engagement, PUBLICATION.publicationId(), "revision");
+        return operation(PUBLICATION, engagement);
+    }
+
+    private static OperationId operation(Publication publication, String engagement) {
+        return new OperationId(publication.firmId(), engagement, publication.publicationId(), "revision");
     }
 }
