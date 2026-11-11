@@ -8,6 +8,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      prove_gate_failure:
+        description: Run an isolated 100% coverage gate to verify that a failed gate fails the job
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -79,3 +85,69 @@ jobs:
           scanners: vuln,secret
           severity: HIGH,CRITICAL
           exit-code: '1'
+
+  quality:
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    concurrency:
+      group: sonarqube-${{ github.ref == 'refs/heads/main' && 'main' || github.run_id }}
+      cancel-in-progress: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18.6
+        env:
+          POSTGRES_DB: fanout
+          POSTGRES_USER: fanout
+          POSTGRES_PASSWORD: fanout-ci
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -h localhost -U fanout -d fanout"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: maven
+      - name: Build and collect unit and PostgreSQL coverage
+        env:
+          FANOUT_DB_URL: jdbc:postgresql://127.0.0.1:${{ job.services.postgres.ports[5432] }}/fanout
+          FANOUT_DB_USER: fanout
+          FANOUT_DB_PASSWORD: fanout-ci
+        run: ./mvnw --batch-mode --no-transfer-progress -Ppostgres-integration,coverage -DfailIfNoTests=true clean verify
+      - name: Analyze Java and enforce the SonarQube Quality Gate
+        env:
+          SONAR_HOST_URL: ${{ github.ref == 'refs/heads/main' && vars.SONAR_HOST_URL || '' }}
+          SONAR_PROJECT_KEY: ${{ github.ref == 'refs/heads/main' && vars.SONAR_PROJECT_KEY || '' }}
+          SONAR_TOKEN: ${{ github.ref == 'refs/heads/main' && secrets.SONAR_TOKEN || '' }}
+          PROVE_GATE_FAILURE: ${{ inputs.prove_gate_failure || false }}
+        run: |
+          if [[ "$PROVE_GATE_FAILURE" == true ]]; then
+            bash scripts/run-sonarqube.sh --prove-gate-failure
+          else
+            bash scripts/run-sonarqube.sh
+          fi
+      - name: Publish the Quality Gate summary
+        if: always()
+        run: |
+          if [[ -f target/sonar-quality/summary.md ]]; then
+            cat target/sonar-quality/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload coverage and SonarQube reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sonarqube-quality
+          path: |
+            target/site/jacoco/
+            target/sonar-quality/
+          if-no-files-found: ignore
+          retention-days: 14

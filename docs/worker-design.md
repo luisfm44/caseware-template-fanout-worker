@@ -32,7 +32,11 @@ The simulator holds submissions under test control so the demo can measure overl
 
 The demo reads the jobs for one publication and dispatches them in one process. A production deployment needs a durable consumer to claim jobs, a live downstream adapter with authoritative status and durable idempotency, and shared admission for multiple worker processes. The broader proposal also covers regional ownership and data residency. [System design](architecture.pdf)
 
-The open follow-ups cover [SonarQube quality checks][issue-8] and the [GitHub Wiki][issue-9].
+## Code quality · Issue [#8][issue-8]
+
+JaCoCo combines coverage from the unit and PostgreSQL integration suites. SonarQube Community Build enforces the overall coverage floor on `main` and supports isolated manual verification. The default runner-local instance publishes the gate, metrics and findings as artifacts. An existing SonarQube instance can provide historical analysis through a configured project token. [Quality workflow and reproduction](code-quality.md)
+
+The [GitHub Wiki][issue-9] remains a follow-up for reviewer and contributor navigation.
 
 When an issue changes a contract, component boundary, or verification step, update the affected design decision and architecture section in the same pull request. Link the issue and the test or workflow that demonstrates the change. Update the system design appendix when the change affects the relationship between the implementation and the proposed deployment.
 
