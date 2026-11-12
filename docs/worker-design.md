@@ -57,6 +57,14 @@ With a fixed set of continuously eligible firms, each receives a reservation wit
 
 The [two-JVM integration test](../src/test/java/io/github/luisfm44/caseware/worker/bootstrap/DurableWorkerProcessIT.java) fills a two-slot pool with large-firm work, adds a small firm and releases one slot. It checks that the next downstream start belongs to the small firm with 30 large-firm jobs still ready. It then verifies that the large firm resumes and that the measured peak stays at two. Apply the worker version to all replicas sharing the schema before relying on the rotation across the pool.
 
+## Regional delivery boundary
+
+Issue [#20][issue-20]. The exercise uses the PostgreSQL job table as its dispatch queue. The proposed regional deployment uses SQS Standard for delivery and a regional PostgreSQL ledger for claims, authorized attempts and terminal results. The engagement manager provides the hard limit and owns the effect ledger. A worker restart or redelivery therefore resumes the same operation and reconciles any uncertain attempt. The regional worker acknowledges only after recording a terminal result.
+
+The local tests exercise these contracts with a controlled downstream and source. The regional release criteria require a real manager, source and SQS test queue. Fair Queues addresses delivery delay under uneven load. The strict turn order demonstrated by the exercise's PostgreSQL scheduler applies to the exercise. Version selection and summary validation belong to their owning services.
+
+[Regional deployment design](system-architecture.md#dispatch-by-environment) · [Regional verification plan](regional-verification.md) · [Owner-side acceptance tests](owner-acceptance.md)
+
 ## Code quality · Issue [#8][issue-8]
 
 JaCoCo combines coverage from the unit and PostgreSQL integration suites. SonarQube Community Build enforces the overall coverage floor on `main` and supports isolated manual verification. The default runner-local instance publishes the gate, metrics and findings as artifacts. An existing SonarQube instance can provide historical analysis through a configured project token. [Quality workflow and reproduction](code-quality.md)
