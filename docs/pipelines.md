@@ -1,29 +1,27 @@
 # GitHub Actions pipelines
 
-The root Maven project builds the Java worker. The two reference APIs under `examples/` have separate Maven projects and HTTP acceptance workflows. [Report and test evidence](evidence/README.md)
+The root Maven project builds the Java worker. **Verify and scan** calls both standalone HTTP workflows and the connected reference workflow, then combines their outcomes with the worker quality result. [Report and test evidence](evidence/README.md)
 
-| GitHub event | Verify and scan | Run local deployment demo | Regional version selection E2E | Summary validation E2E |
-| --- | --- | --- | --- | --- |
-| Pull request targeting `main` | `verify`, `security` | — | Matching paths | Matching paths |
-| Push to `main`, including a merge | `verify`, `security`, `quality` | — | Matching paths | Matching paths |
-| Push to another branch | — | — | Matching paths | Matching paths |
-| Manual dispatch | `verify`, `security`, `quality` | `smoke` | `e2e` | `e2e` |
+| GitHub event | Verify and scan | Reference HTTP workflows | Run local deployment demo |
+| --- | --- | --- | --- |
+| Pull request targeting `main` | `verify`, `security`, `quality` | All three called by Verify and scan | — |
+| Push to `main`, including a merge | `verify`, `security`, `quality` | All three called by Verify and scan | — |
+| Push to another branch | — | — | — |
+| Manual dispatch | `verify`, `security`, `quality` | Called by Verify and scan or dispatched individually | `smoke` |
 
-Each HTTP workflow matches its example directory, its workflow file and Maven Wrapper files. The summary workflow also matches the shared report renderer in the regional example. A change confined to documentation outside those paths leaves both HTTP workflows untriggered. Use manual dispatch to rerun either suite on a selected branch. [Worker verification workflow](../.github/workflows/ci.yml) · [Demo workflow](../.github/workflows/demo.yml) · [Regional workflow](../.github/workflows/regional-version-selection.yml) · [Summary workflow](../.github/workflows/summary-validation.yml)
+The automatic checks run across all PRs to `main`. Use manual dispatch to reproduce an individual HTTP workflow on a selected branch. [Verify and scan](../.github/workflows/ci.yml) · [Demo workflow](../.github/workflows/demo.yml) · [Regional workflow](../.github/workflows/regional-version-selection.yml) · [Summary workflow](../.github/workflows/summary-validation.yml) · [Connected workflow](../.github/workflows/connected-reference-apis.yml)
 
 ## Jobs and pull request checks
 
-- **`verify`** uses JDK 25 and PostgreSQL 18.6. It runs the root project's unit and PostgreSQL integration tests and builds `target/template-fanout-worker.jar`. The `worker-and-test-results` artifact contains the JAR and both XML report sets for seven days.
+- **`verify`** is the required merge check. It waits for `quality` and the three reference HTTP workflows and requires a successful result from each.
 - **`security`** uses Trivy to scan the checkout for high and critical vulnerabilities and secrets. Findings in those severity levels fail the job.
-- **`quality`** collects worker coverage and runs the SonarQube Quality Gate. The job is skipped for a pull request event. Use a manual run on the PR branch to obtain the gate result for worker Java or test changes.
+- **`quality`** uses JDK 25 and PostgreSQL 18.6 to run the worker unit and integration tests, enforce JaCoCo, package the worker and run SonarQube. `worker-and-test-results` contains the JAR and both sets of XML reports for seven days. `sonarqube-quality` contains the coverage and analysis reports for 14 days.
 
 ## Code quality
 
-The worker build requires **100% line coverage and 100% branch coverage in JaCoCo** across the unit and PostgreSQL integration suites. The repository-managed **SonarQube Quality Gate requires 100% overall coverage**. The two separate example projects publish their acceptance results through the HTTP workflows.
+The worker build requires **100% line and branch coverage in JaCoCo**. The repository-managed SonarQube Quality Gate requires **100% overall worker coverage**. The PostgreSQL and HTTP suites assert behavior, including recovery, shared capacity, offer rules and summary promotion. Open the PR's **Verify and scan** run to inspect the results. To reproduce the full workflow manually, leave `prove_gate_failure` unchecked.
 
-From **Actions → Verify and scan → Run workflow**, select the PR branch and leave **prove_gate_failure** unchecked for normal validation. A repository maintainer can dispatch the workflow for contributors without write access. Confirm that the successful run uses the PR's current commit. The run summary shows the gate result and coverage. The `sonarqube-quality` artifact contains the JaCoCo reports and SonarQube analysis results. Attach the run link to the PR when recording Test evidence.
-
-The `prove_gate_failure` input builds a unit-only coverage report for a separate analysis. SonarQube rejects that report when coverage is below 100%, so GitHub marks `quality` as failed. Record the full run as acceptance evidence. [Local reproduction and reports](code-quality.md)
+The manual `prove_gate_failure` input builds a unit-only coverage report for a separate analysis. SonarQube rejects that report when coverage is below 100%. The failed `quality` job makes `verify` fail as well. Use a normal run to record acceptance evidence. [Local reproduction and reports](code-quality.md)
 
 ## Worker process tests and demo
 
@@ -33,14 +31,15 @@ From **Actions → Run local deployment demo → Run workflow**, select the bran
 
 ## HTTP acceptance reports
 
-Both workflows use JDK 25 and send real loopback HTTP requests to Spring Boot with synthetic fixtures. Their reports include Surefire outcomes, fixture details and recorded exchanges.
+The workflows use JDK 25 and send real loopback HTTP requests to Spring Boot with synthetic fixtures. Their reports include Surefire outcomes, fixture details and recorded exchanges.
 
 | Workflow | Artifact | Local instructions |
 | --- | --- | --- |
 | Regional version selection E2E | `regional-version-selection-e2e` | [Regional version selection mockup](../examples/regional-version-selection/README.md) |
 | Summary validation E2E | `summary-validation-e2e` | [Summary validation mockup](../examples/summary-validation/README.md) |
+| Connected reference APIs | `connected-reference-apis` | [Connected flow with mocks](../examples/connected-reference-apis/README.md) |
 
-Open the run **Summary** or **Artifacts** section, download the archive and open `evidence/index.html` after extracting it. Both workflows retain reports for 30 days. The examples verify reference behavior with controlled dependencies. The owning APIs provide separate CI evidence, and regional readiness requires a run in the regional test environment. [Evidence index](evidence/README.md) · [Owner acceptance criteria](owner-acceptance.md) · [Regional readiness](regional-verification.md)
+Open **Verify and scan** or a standalone run, then its **Summary** or **Artifacts** section. Download the archive and open `evidence/index.html` after extracting it. Each HTTP workflow retains reports for 30 days. The examples verify reference behavior with controlled dependencies. A future regional rollout requires evidence from the deployed services, durable storage and queue. [Evidence index](evidence/README.md) · [Owner acceptance criteria](owner-acceptance.md) · [Regional readiness](regional-verification.md)
 
 ## Diagnose a run
 

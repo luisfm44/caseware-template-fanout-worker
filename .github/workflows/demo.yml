@@ -34,13 +34,13 @@ jobs:
           cache: maven
       - name: Verify and package
         env:
-          FANOUT_DB_URL: jdbc:postgresql://127.0.0.1:${{ job.services.postgres.ports[5432] }}/fanout
+          FANOUT_DB_URL: jdbc:postgresql://127.0.0.1:${{ job.services.postgres.ports['5432'] }}/fanout
           FANOUT_DB_USER: fanout
           FANOUT_DB_PASSWORD: fanout-ci
         run: ./mvnw --batch-mode --no-transfer-progress -Ppostgres-integration -DfailIfNoTests=true verify
       - name: Run the demo workload with an in-process downstream
         env:
-          FANOUT_DB_URL: jdbc:postgresql://127.0.0.1:${{ job.services.postgres.ports[5432] }}/fanout
+          FANOUT_DB_URL: jdbc:postgresql://127.0.0.1:${{ job.services.postgres.ports['5432'] }}/fanout
           FANOUT_DB_USER: fanout
           FANOUT_DB_PASSWORD: fanout-ci
         run: |
