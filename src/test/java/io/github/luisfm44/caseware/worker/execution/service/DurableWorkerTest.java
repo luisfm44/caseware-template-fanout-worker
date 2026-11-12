@@ -14,9 +14,12 @@ import io.github.luisfm44.caseware.worker.execution.port.JobQueue.Claim;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class DurableWorkerTest {
@@ -87,5 +90,33 @@ class DurableWorkerTest {
         } finally {
             Thread.interrupted();
         }
+    }
+
+    @Test
+    void retriesConsecutiveQueueDisconnectsAndStopsWhenInterruptedDuringTheWait() {
+        var unavailable = new JobQueue.Unavailable(new IOException("disconnected"));
+        when(jobs.claimReady()).thenThrow(unavailable).thenThrow(unavailable).thenAnswer(ignored -> {
+            Thread.currentThread().interrupt();
+            return Optional.empty();
+        });
+
+        try {
+            worker.consume();
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+        } finally {
+            Thread.interrupted();
+        }
+
+        verify(jobs, times(3)).claimReady();
+        verifyNoInteractions(transport);
+    }
+
+    @Test
+    void propagatesFatalQueueErrors() {
+        var failure = new IllegalStateException("invalid schema");
+        when(jobs.claimReady()).thenThrow(failure);
+
+        assertThatThrownBy(worker::consume).isSameAs(failure);
+        verifyNoInteractions(transport);
     }
 }

@@ -25,6 +25,13 @@ public interface JobQueue {
      */
     boolean settle(Claim claim, UUID attemptId, Outcome outcome, Duration nextDelay);
 
+    /** Connectivity was interrupted and the last operation might have committed. */
+    final class Unavailable extends IllegalStateException {
+        public Unavailable(Throwable cause) {
+            super("Lost connectivity to the durable job queue", cause);
+        }
+    }
+
     record Claim(OperationId operationId, UUID token, UUID attemptId, int submissions, int pollCount,
             boolean reconciling) {}
 }

@@ -11,6 +11,7 @@ import io.github.luisfm44.caseware.worker.execution.port.JobQueue.Claim;
 /** Consumes reserved attempts and reconciles uncertain downstream outcomes. */
 public final class DurableWorker {
 
+    private static final int MAX_BACKOFF_EXPONENT = 5;
     private static final System.Logger LOGGER = System.getLogger(DurableWorker.class.getName());
 
     private final JobQueue jobs;
@@ -24,17 +25,30 @@ public final class DurableWorker {
     }
 
     public void consume() {
-        while (!Thread.currentThread().isInterrupted()) {
-            try {
-                var claim = jobs.claimReady();
-                if (claim.isPresent()) {
-                    process(claim.get());
-                } else {
-                    Thread.sleep(idleDelay);
+        int queueFailures = 0;
+        try {
+            while (!Thread.currentThread().isInterrupted()) {
+                try {
+                    var claim = jobs.claimReady();
+                    if (claim.isPresent()) {
+                        process(claim.get());
+                    } else {
+                        Thread.sleep(idleDelay);
+                    }
+                    queueFailures = 0;
+                } catch (JobQueue.Unavailable unavailable) {
+                    if (queueFailures == 0) {
+                        LOGGER.log(System.Logger.Level.WARNING,
+                                "Durable job queue unavailable; will resume from persisted state", unavailable);
+                    }
+                    // An interrupted write may already have committed. Start at claimReady again
+                    // to read the authoritative state instead of repeating the write or HTTP request.
+                    Thread.sleep(backoff(queueFailures));
+                    queueFailures = Math.min(queueFailures + 1, MAX_BACKOFF_EXPONENT);
                 }
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
             }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -75,6 +89,6 @@ public final class DurableWorker {
     }
 
     private static Duration backoff(int previousAttempts) {
-        return Duration.ofMillis(100L << Math.min(previousAttempts, 5));
+        return Duration.ofMillis(100L << Math.min(previousAttempts, MAX_BACKOFF_EXPONENT));
     }
 }
