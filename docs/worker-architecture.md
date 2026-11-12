@@ -100,15 +100,15 @@ The semaphore shares capacity within a single JVM. A deployment with separate wo
 
 ## Durable publication planning
 
-[`PublicationFanout`][planner] asks an [`EngagementSource`][source] for one bounded page of eligible engagements at a time. The source keeps each publication's membership, revisions and cursor order stable across restarts. The planner converts each engagement to the same `OperationId` used for downstream execution.
+[`PublicationFanout`][planner] asks an [`EngagementSource`][source] for the first bounded page of eligible engagements and its snapshot ID. The planner converts each engagement to the same `OperationId` used for downstream execution. Subsequent requests send the snapshot ID and cursor read from the checkpoint.
 
 [`PostgresFanoutStore`][store] commits the page in a single transaction.
 
-1. Check that the publication's stored cursor and page count still match the ones used to read the page. Stage the next cursor, or mark planning complete for the final page.
-2. Insert the jobs into `fanout_job`. Its primary key is the four fields of `OperationId`. A repeated key leaves the existing job intact.
-3. Commit the jobs and the update to `fanout_checkpoint` together. If any job insert fails, PostgreSQL rolls back the entire page. If another planner moved the checkpoint, the caller reads it again before planning another page.
+1. Pin the first page's snapshot ID. For later pages, check that the stored snapshot, cursor and page count still match the checkpoint used to read the page.
+2. Insert the jobs into `fanout_job`. Its primary key is the four fields of `OperationId`. Replaying an operation key preserves its execution state.
+3. Commit the jobs and checkpoint together. The checkpoint stores the snapshot ID, next cursor and page count. A final page marks the checkpoint complete. A failed job insert rolls back the entire page.
 
-After an interruption, a new planner resumes from the last committed cursor. Replaying a fully planned publication returns immediately. Planning records jobs for downstream execution, which continues to use the separate admission and worker contracts above.
+If two planners read different initial snapshots, the first successful commit pins the snapshot. The other planner reloads the committed checkpoint and uses its snapshot and cursor on the next request. A fresh process resumes the same way after an interruption. An unavailable snapshot or a response for a different snapshot stops planning before the next commit. Replaying a completed publication returns immediately. [Snapshot contract and legacy checkpoints](worker-design.md#engagement-snapshots)
 
 ## Downstream retries and reconciliation
 

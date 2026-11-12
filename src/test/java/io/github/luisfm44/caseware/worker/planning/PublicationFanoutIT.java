@@ -27,6 +27,7 @@ import static org.mockito.Mockito.when;
 class PublicationFanoutIT {
 
     private static final Publication PUBLICATION = new Publication("firm-a", "publication-42");
+    private static final String SNAPSHOT_ID = "engagements-v1";
     private static final int PAGE_SIZE = 2;
     private static final List<Engagement> ELIGIBLE = List.of(
             new Engagement("engagement-1", "revision-1"),
@@ -60,7 +61,7 @@ class PublicationFanoutIT {
 
         assertThat(firstPlanner.planNextPage(PUBLICATION)).isTrue();
         assertThat(initialRequests).containsExactly((String) null);
-        assertThat(firstStore.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(1, "after-2", false));
+        assertThat(firstStore.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(1, "after-2", false, SNAPSHOT_ID));
         assertThat(storedJobs(dataSource)).containsExactlyInAnyOrderElementsOf(expectedJobs().subList(0, 2));
 
         var reopenedDataSource = dataSource();
@@ -70,13 +71,13 @@ class PublicationFanoutIT {
         resumedPlanner.plan(PUBLICATION);
 
         assertThat(resumedRequests).containsExactly("after-2", "after-4");
-        assertThat(reopenedStore.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(3, null, true));
+        assertThat(reopenedStore.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(3, null, true, SNAPSHOT_ID));
         assertThat(storedJobs(reopenedDataSource)).containsExactlyInAnyOrderElementsOf(expectedJobs());
 
         resumedRequests.clear();
         resumedPlanner.plan(PUBLICATION);
         assertThat(resumedRequests).isEmpty();
-        assertThat(reopenedStore.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(3, null, true));
+        assertThat(reopenedStore.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(3, null, true, SNAPSHOT_ID));
         assertThat(storedJobs(reopenedDataSource)).containsExactlyInAnyOrderElementsOf(expectedJobs());
     }
 
@@ -96,14 +97,14 @@ class PublicationFanoutIT {
         assertThatThrownBy(() -> planner.planNextPage(PUBLICATION))
                 .hasRootCauseInstanceOf(SQLException.class);
 
-        assertThat(store.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(1, "after-2", false));
+        assertThat(store.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(1, "after-2", false, SNAPSHOT_ID));
         assertThat(storedJobs(dataSource)).containsExactlyInAnyOrderElementsOf(expectedJobs().subList(0, 2));
 
         execute(dataSource, "ALTER TABLE fanout_job DROP CONSTRAINT reject_fourth_engagement");
         planner.plan(PUBLICATION);
 
         assertThat(requestedCursors).containsExactly(null, "after-2", "after-2", "after-4");
-        assertThat(store.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(3, null, true));
+        assertThat(store.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(3, null, true, SNAPSHOT_ID));
         assertThat(storedJobs(dataSource)).containsExactlyInAnyOrderElementsOf(expectedJobs());
     }
 
@@ -116,52 +117,88 @@ class PublicationFanoutIT {
         var committedJob = expectedJobs().get(0);
         var staleJob = expectedJobs().get(1);
 
-        assertThat(firstStore.commitPage(PUBLICATION, staleCheckpoint, List.of(committedJob), "after-1"))
+        assertThat(firstStore.commitPage(PUBLICATION, staleCheckpoint, List.of(committedJob), "after-1", SNAPSHOT_ID))
                 .isTrue();
-        assertThat(otherStore.commitPage(PUBLICATION, staleCheckpoint, List.of(staleJob), "after-2"))
+        assertThat(otherStore.commitPage(PUBLICATION, staleCheckpoint, List.of(staleJob), "after-2", SNAPSHOT_ID))
                 .isFalse();
 
-        assertThat(otherStore.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(1, "after-1", false));
+        assertThat(otherStore.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(1, "after-1", false, SNAPSHOT_ID));
         assertThat(storedJobs(dataSource)).containsExactly(committedJob);
 
         var previous = otherStore.checkpoint(PUBLICATION);
-        assertThat(firstStore.commitPage(PUBLICATION, previous, List.of(staleJob), "after-2")).isTrue();
-        assertThat(otherStore.commitPage(PUBLICATION, previous, List.of(expectedJobs().get(2)), null)).isFalse();
+        assertThat(firstStore.commitPage(PUBLICATION, previous, List.of(staleJob), "after-2", SNAPSHOT_ID)).isTrue();
+        assertThat(otherStore.commitPage(PUBLICATION, previous, List.of(expectedJobs().get(2)), null, SNAPSHOT_ID)).isFalse();
 
-        assertThat(otherStore.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(2, "after-2", false));
+        assertThat(otherStore.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(2, "after-2", false, SNAPSHOT_ID));
         assertThat(storedJobs(dataSource)).containsExactlyInAnyOrder(committedJob, staleJob);
     }
 
     @Test
-    void rereadsTheCheckpointAfterAnotherPlannerCommitsFirst() throws SQLException {
+    void advancesOnlyACheckpointForTheOriginalSnapshot() {
+        var store = new PostgresFanoutStore(dataSource());
+        var initial = store.checkpoint(PUBLICATION);
+        var firstJob = expectedJobs().get(0);
+        var nextJobs = List.of(expectedJobs().get(1));
+
+        for (String invalidSnapshot : new String[] {null, "  "}) {
+            assertThatThrownBy(() -> store.commitPage(PUBLICATION, initial, List.of(firstJob), "after-1",
+                    invalidSnapshot))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessage("snapshotId must be non-blank");
+        }
+        assertThat(store.checkpoint(PUBLICATION)).isEqualTo(initial);
+        assertThat(store.listJobs(PUBLICATION, 10)).isEmpty();
+        assertThat(store.commitPage(PUBLICATION, initial, List.of(firstJob), "after-1", SNAPSHOT_ID)).isTrue();
+
+        var committed = store.checkpoint(PUBLICATION);
+        var otherSnapshot = "engagements-v2";
+        assertThatThrownBy(() -> store.commitPage(PUBLICATION, committed, nextJobs, null, otherSnapshot))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("A committed checkpoint requires its original snapshot");
+
+        var differentCheckpoint = new Checkpoint(committed.pagesCommitted(), committed.nextCursor(), false,
+                otherSnapshot);
+        assertThat(store.commitPage(PUBLICATION, differentCheckpoint, nextJobs, null, otherSnapshot)).isFalse();
+        assertThat(store.checkpoint(PUBLICATION)).isEqualTo(committed);
+        assertThat(store.listJobs(PUBLICATION, 10)).containsExactly(firstJob);
+    }
+
+    @Test
+    void resumesTheWinningSnapshotAfterAnotherPlannerCommitsFirst() throws SQLException {
         var store = new PostgresFanoutStore(dataSource());
         var competingPlanner = new PublicationFanout(source(new ArrayList<>()), store, PAGE_SIZE);
         var requestedCursors = new ArrayList<String>();
+        var requestedSnapshots = new ArrayList<String>();
         var pages = source(requestedCursors);
-        EngagementSource sourceWithConcurrentCommit = (publication, cursor, limit) -> {
-            var page = pages.fetch(publication, cursor, limit);
+        EngagementSource sourceWithConcurrentCommit = (publication, snapshotId, cursor, limit) -> {
+            requestedSnapshots.add(snapshotId);
             if (cursor == null) {
+                requestedCursors.add(null);
                 assertThat(competingPlanner.planNextPage(publication)).isTrue();
+                return new Page(List.of(new Engagement("losing-engagement", "revision-1")),
+                        "losing-cursor", "engagements-v2");
             }
-            return page;
+            return pages.fetch(publication, snapshotId, cursor, limit);
         };
 
         new PublicationFanout(sourceWithConcurrentCommit, store, PAGE_SIZE).plan(PUBLICATION);
 
+        assertThat(requestedSnapshots).containsExactly(null, SNAPSHOT_ID, SNAPSHOT_ID);
         assertThat(requestedCursors).containsExactly(null, "after-2", "after-4");
-        assertThat(store.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(3, null, true));
+        assertThat(store.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(3, null, true, SNAPSHOT_ID));
         assertThat(store.listJobs(PUBLICATION, 10)).containsExactlyElementsOf(expectedJobs());
     }
 
     @Test
     void rejectsOversizedPagesBeforeRecordingAnyJobs() throws SQLException {
         var store = new PostgresFanoutStore(dataSource());
-        var planner = new PublicationFanout((publication, cursor, limit) -> new Page(ELIGIBLE, null), store, PAGE_SIZE);
+        EngagementSource source = (publication, snapshotId, cursor, limit) -> new Page(ELIGIBLE, null, SNAPSHOT_ID);
+        var planner = new PublicationFanout(source, store, PAGE_SIZE);
 
         assertThatThrownBy(() -> planner.planNextPage(PUBLICATION))
                 .isInstanceOf(IllegalStateException.class).hasMessage("Engagement source exceeded the page size");
 
-        assertThat(store.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(0, null, false));
+        assertThat(store.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(0, null, false, null));
         assertThat(store.listJobs(PUBLICATION, 10)).isEmpty();
     }
 
@@ -169,13 +206,14 @@ class PublicationFanoutIT {
     void rejectsRepeatedCursorsWithoutAdvancingTheCheckpoint() throws SQLException {
         var store = new PostgresFanoutStore(dataSource());
         new PublicationFanout(source(new ArrayList<>()), store, PAGE_SIZE).planNextPage(PUBLICATION);
-        var planner = new PublicationFanout(
-                (publication, cursor, limit) -> new Page(List.of(ELIGIBLE.get(2)), cursor), store, PAGE_SIZE);
+        EngagementSource source =
+                (publication, snapshotId, cursor, limit) -> new Page(List.of(ELIGIBLE.get(2)), cursor, SNAPSHOT_ID);
+        var planner = new PublicationFanout(source, store, PAGE_SIZE);
 
         assertThatThrownBy(() -> planner.planNextPage(PUBLICATION))
                 .isInstanceOf(IllegalStateException.class).hasMessage("Engagement source returned the current cursor");
 
-        assertThat(store.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(1, "after-2", false));
+        assertThat(store.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(1, "after-2", false, SNAPSHOT_ID));
         assertThat(store.listJobs(PUBLICATION, 10)).containsExactlyElementsOf(expectedJobs().subList(0, 2));
     }
 
@@ -189,11 +227,14 @@ class PublicationFanoutIT {
         var otherPublication = new Publication(PUBLICATION.firmId(), "publication-43");
 
         assertThat(store.commitPage(PUBLICATION, store.checkpoint(PUBLICATION),
-                List.of(otherEngagement, nextRevision, firstRevision), null)).isTrue();
-        assertThat(store.commitPage(otherFirm, store.checkpoint(otherFirm), List.of(
-                new OperationId(otherFirm.firmId(), "engagement-0", otherFirm.publicationId(), "revision-1")), null)).isTrue();
-        assertThat(store.commitPage(otherPublication, store.checkpoint(otherPublication), List.of(
-                new OperationId(otherPublication.firmId(), "engagement-0", otherPublication.publicationId(), "revision-1")), null)).isTrue();
+                List.of(otherEngagement, nextRevision, firstRevision), null, SNAPSHOT_ID)).isTrue();
+        var otherFirmJob = new OperationId(otherFirm.firmId(), "engagement-0", otherFirm.publicationId(), "revision-1");
+        var otherPublicationJob = new OperationId(otherPublication.firmId(), "engagement-0",
+                otherPublication.publicationId(), "revision-1");
+        assertThat(store.commitPage(otherFirm, store.checkpoint(otherFirm), List.of(otherFirmJob), null, SNAPSHOT_ID))
+                .isTrue();
+        assertThat(store.commitPage(otherPublication, store.checkpoint(otherPublication),
+                List.of(otherPublicationJob), null, SNAPSHOT_ID)).isTrue();
 
         assertThat(store.listJobs(PUBLICATION, 2)).containsExactly(firstRevision, nextRevision);
         assertThat(store.listJobs(PUBLICATION, 10)).containsExactly(firstRevision, nextRevision, otherEngagement);
@@ -210,7 +251,7 @@ class PublicationFanoutIT {
 
         for (var foreignJob : List.of(otherFirm, otherPublication)) {
             assertThatThrownBy(() -> store.commitPage(PUBLICATION, checkpoint,
-                    List.of(expectedJobs().getFirst(), foreignJob), null))
+                    List.of(expectedJobs().getFirst(), foreignJob), null, SNAPSHOT_ID))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessage("Every job must belong to the publication being planned");
         }
@@ -222,13 +263,14 @@ class PublicationFanoutIT {
     @Test
     void treatsAnEmptyFinalPageAsCompleteAndRejectsFurtherWrites() throws SQLException {
         var store = new PostgresFanoutStore(dataSource());
-        var planner = new PublicationFanout((publication, cursor, limit) -> new Page(List.of(), null), store, PAGE_SIZE);
+        EngagementSource source = (publication, snapshotId, cursor, limit) -> new Page(List.of(), null, SNAPSHOT_ID);
+        var planner = new PublicationFanout(source, store, PAGE_SIZE);
 
         planner.plan(PUBLICATION);
 
         var checkpoint = store.checkpoint(PUBLICATION);
-        assertThat(checkpoint).isEqualTo(new Checkpoint(1, null, true));
-        assertThat(store.commitPage(PUBLICATION, checkpoint, List.of(expectedJobs().getFirst()), null)).isFalse();
+        assertThat(checkpoint).isEqualTo(new Checkpoint(1, null, true, SNAPSHOT_ID));
+        assertThat(store.commitPage(PUBLICATION, checkpoint, List.of(expectedJobs().getFirst()), null, SNAPSHOT_ID)).isFalse();
         assertThat(store.listJobs(PUBLICATION, 10)).isEmpty();
     }
 
@@ -277,7 +319,8 @@ class PublicationFanoutIT {
             when(interruptedDataSource.getConnection()).thenReturn(dataSource.getConnection(), interruptedConnection);
             var store = new PostgresFanoutStore(interruptedDataSource);
 
-            assertThatThrownBy(() -> store.commitPage(PUBLICATION, checkpoint, List.of(expectedJobs().getFirst()), null))
+            assertThatThrownBy(() -> store.commitPage(PUBLICATION, checkpoint,
+                    List.of(expectedJobs().getFirst()), null, SNAPSHOT_ID))
                     .isInstanceOf(IllegalStateException.class).hasMessage("Could not commit fan-out page")
                     .satisfies(failure -> {
                         var writeFailure = (SQLException) failure.getCause();
@@ -305,9 +348,10 @@ class PublicationFanoutIT {
     }
 
     private static EngagementSource source(List<String> requestedCursors) {
-        return (publication, cursor, limit) -> {
+        return (publication, snapshotId, cursor, limit) -> {
             assertThat(publication).isEqualTo(PUBLICATION);
             assertThat(limit).isEqualTo(PAGE_SIZE);
+            assertThat(snapshotId).isEqualTo(cursor == null ? null : SNAPSHOT_ID);
             requestedCursors.add(cursor);
             int start = switch (cursor) {
                 case null -> 0;
@@ -316,7 +360,7 @@ class PublicationFanoutIT {
                 default -> throw new AssertionError("Unexpected cursor: " + cursor);
             };
             int end = Math.min(start + limit, ELIGIBLE.size());
-            return new Page(ELIGIBLE.subList(start, end), end == ELIGIBLE.size() ? null : "after-" + end);
+            return new Page(ELIGIBLE.subList(start, end), end == ELIGIBLE.size() ? null : "after-" + end, SNAPSHOT_ID);
         };
     }
 

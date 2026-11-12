@@ -29,8 +29,8 @@ class DemoRunnerTest {
 
     @Test
     void rejectsAStaleCheckpointBeforeProceeding() {
-        var stale = new Checkpoint(1, "2", false);
-        var expected = new Checkpoint(4, null, true);
+        var stale = new Checkpoint(1, "2", false, "engagements-v1");
+        var expected = new Checkpoint(4, null, true, "engagements-v1");
 
         assertThatIllegalStateException().isThrownBy(() -> DemoRunner.verifyCheckpoint(stale, expected))
                 .withMessageContaining("Expected demo checkpoint", "pagesCommitted=4", "pagesCommitted=1");

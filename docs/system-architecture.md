@@ -70,6 +70,8 @@ flowchart TB
 | Engagement manager | Own file creation, opening and decisions. Check the expected file revision before writing verified metadata. The template authority orders decision admission against withdrawal. |
 | Background verification | Plan jobs only for unknown or flagged baselines. Use the same operation ID for delivery retries and status lookups. Acknowledge the SQS message after durable completion. |
 
+Before regional deployment, verify that the engagement source can reopen a publication's pinned snapshot from a fresh worker process and preserve its membership, order, revisions and cursor semantics until planning completes. [Worker snapshot contract](worker-design.md#engagement-snapshots)
+
 The firm's home region keeps workpapers, decisions, receipts, queues, logs, keys and backups. Template data and opaque admission tokens can cross regions. The engagement manager's API is the boundary for workpaper access.
 
 For background loads, the engagement manager holds a shared slot until completion or enforced cancellation. The proposal's **20 owner slots** are a sizing assumption to validate. The local demo uses **three permits within one JVM**. A regional deployment needs durable job claiming, a production transport adapter and a capacity authority shared by worker processes.

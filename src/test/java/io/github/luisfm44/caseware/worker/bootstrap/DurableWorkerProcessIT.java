@@ -208,7 +208,8 @@ class DurableWorkerProcessIT {
 
     private static void plan(PGSimpleDataSource database, Publication publication, List<Engagement> engagements) {
         var store = new PostgresFanoutStore(database);
-        new PublicationFanout((requested, cursor, limit) -> new Page(engagements, null),
+        new PublicationFanout((requested, snapshotId, cursor, limit) -> new Page(engagements, null,
+                "worker-process-snapshot"),
                 store, engagements.size()).plan(publication);
     }
 

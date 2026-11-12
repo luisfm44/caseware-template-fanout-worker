@@ -10,11 +10,19 @@ The semaphore coordinates workers in the single-JVM demo. The durable worker pro
 
 ## Durable planning · Issue [#2][issue-2]
 
-The planner converts each bounded page of eligible engagements into jobs keyed by `OperationId`, which combines firm, engagement, publication, and engagement revision. PostgreSQL commits the page's jobs and checkpoint together. A checkpoint comparison rejects a stale writer, and the job key makes page replay safe. The engagement source must preserve membership, revision, order, and cursor meaning for the life of a publication. [PostgreSQL integration tests][planning-test]
+The planner converts each bounded page of eligible engagements into jobs keyed by `OperationId`, which combines firm, engagement, publication and engagement revision. PostgreSQL commits the page's jobs and checkpoint together. A checkpoint comparison rejects a stale writer, and the job key makes page replay safe. [PostgreSQL integration tests][planning-test]
 
 `PostgresFanoutStore` uses JDBC directly. The SQL expresses the checkpoint comparison and unique job key, and the store commits or rolls back the page explicitly. The planning schema starts with two tables. An ORM such as Hibernate would provide entity mapping if the model grows to include more relationships and entity lifecycles.
 
-A fresh planner resumes from the last committed cursor after interruption. The transaction boundary covers planning data. The durable worker profile claims the persisted jobs for execution.
+### Engagement snapshots
+
+Issue [#19][issue-19]. The engagement source returns a snapshot ID with the first page. It must preserve eligible membership, order, engagement revisions and cursor meaning within that snapshot, including across process restarts. Each resumed request supplies the pinned ID and cursor. An expired or unavailable snapshot is an explicit source error. The planner checks that the response identifies the requested snapshot before accepting the page. The source and regional API own eligibility and target-version rules.
+
+A fresh planner resumes from the last committed snapshot ID and cursor. Legacy completed checkpoints still end planning immediately. An incomplete legacy checkpoint without a snapshot ID stops with an explicit error because its cursor has no verified snapshot. The durable worker profile claims the persisted jobs for execution. Upgrade all planners sharing the schema before relying on snapshot pinning across processes.
+
+The [snapshot integration tests][snapshot-test] resume in a fresh JVM after the source inserts, deletes and revises engagements. They verify that expiry and mismatched responses leave the committed jobs and checkpoint intact.
+
+Regional validation must confirm that the real engagement source can reopen the pinned snapshot after a process restart and that its retention period covers the expected publication recovery window. [Regional validation][issue-20]
 
 ## Downstream reconciliation · Issue [#3][issue-3]
 
@@ -66,7 +74,10 @@ When an issue changes a contract, component boundary, or verification step, upda
 [issue-8]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/8
 [issue-9]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/9
 [issue-12]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/12
+[issue-19]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/19
+[issue-20]: https://github.com/luisfm44/caseware-template-fanout-worker/issues/20
 [wiki]: https://github.com/luisfm44/caseware-template-fanout-worker/wiki
 [admission-test]: ../src/test/java/io/github/luisfm44/caseware/worker/execution/admission/SharedAdmissionTest.java
 [planning-test]: ../src/test/java/io/github/luisfm44/caseware/worker/planning/PublicationFanoutIT.java
+[snapshot-test]: ../src/test/java/io/github/luisfm44/caseware/worker/planning/PublicationSnapshotIT.java
 [retry-test]: ../src/test/java/io/github/luisfm44/caseware/worker/execution/retry/RetryingDownstreamClientTest.java

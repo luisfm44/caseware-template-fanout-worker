@@ -223,7 +223,8 @@ class PostgresJobQueueIT {
 
     private void seed(Publication publication, OperationId... jobs) {
         var planning = new PostgresFanoutStore(database);
-        assertThat(planning.commitPage(publication, planning.checkpoint(publication), List.of(jobs), null)).isTrue();
+        assertThat(planning.commitPage(publication, planning.checkpoint(publication), List.of(jobs), null,
+                "queue-test-snapshot")).isTrue();
     }
 
     private void expireFirstClaim() throws SQLException {
