@@ -7,6 +7,7 @@ import java.sql.SQLException;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import javax.sql.DataSource;
 
@@ -18,6 +19,9 @@ import io.github.luisfm44.caseware.worker.execution.port.JobQueue;
 public final class PostgresJobQueue implements JobQueue {
 
     private static final int MAX_SUBMISSIONS = 3;
+    // Connection loss, unknown transaction outcome, shutdown or database startup.
+    private static final Set<String> RECONNECTABLE_STATES =
+            Set.of("08001", "08003", "08006", "08007", "57P01", "57P02", "57P03");
     private static final String MATCHING_CLAIM = """
             WHERE firm_id = ? AND publication_id = ? AND engagement_id = ? AND engagement_revision = ?
               AND claim_token = ?
@@ -25,12 +29,19 @@ public final class PostgresJobQueue implements JobQueue {
 
     private final DataSource dataSource;
     private final long claimMillis;
+    private final long reconciliationMillis;
 
     public PostgresJobQueue(DataSource dataSource, int capacity, Duration claimTtl) {
+        this(dataSource, capacity, claimTtl, claimTtl);
+    }
+
+    public PostgresJobQueue(DataSource dataSource, int capacity, Duration claimTtl, Duration reconciliationTtl) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.claimMillis = claimTtl.toMillis();
-        if (capacity <= 0 || claimMillis <= 0) {
-            throw new IllegalArgumentException("capacity and claim duration must be positive");
+        this.reconciliationMillis = reconciliationTtl.toMillis();
+        if (capacity <= 0 || claimMillis <= 0 || reconciliationMillis < claimMillis) {
+            throw new IllegalArgumentException("capacity and claim duration must be positive, and reconciliation "
+                    + "duration must be at least the claim duration");
         }
 
         transaction(connection -> {
@@ -131,7 +142,7 @@ public final class PostgresJobQueue implements JobQueue {
                           job.claim_token, job.attempt_id, job.submissions, job.poll_count
                 """)) {
             statement.setObject(1, UUID.randomUUID());
-            statement.setLong(2, claimMillis);
+            statement.setLong(2, reconciliationMillis);
             try (var rows = statement.executeQuery()) {
                 return rows.next() ? Optional.of(readClaim(rows, true)) : Optional.empty();
             }
@@ -206,19 +217,20 @@ public final class PostgresJobQueue implements JobQueue {
 
     /** Releases the claim for a later poll, retaining any uncertain attempt and its reservation. */
     @Override
-    public void defer(Claim claim, Duration delay) {
-        query(connection -> {
+    public boolean defer(Claim claim, Duration delay) {
+        return query(connection -> {
             try (var statement = connection.prepareStatement("""
                     UPDATE fanout_job
                     SET claim_token = NULL, claim_until = NULL,
                         available_at = clock_timestamp() + (? * INTERVAL '1 millisecond'),
-                        poll_count = CASE WHEN attempt_id IS NULL THEN 0 ELSE LEAST(poll_count + 1, 30) END
+                        poll_count = LEAST(poll_count + 1, 30)
                     """ + MATCHING_CLAIM + """
-                      AND claim_until > clock_timestamp()
+                      AND attempt_id = ?
                     """)) {
                 statement.setLong(1, delay.toMillis());
                 bindClaim(statement, 2, claim);
-                return statement.executeUpdate();
+                statement.setObject(7, claim.attemptId());
+                return statement.executeUpdate() == 1;
             }
         });
     }
@@ -283,6 +295,9 @@ public final class PostgresJobQueue implements JobQueue {
         try (var connection = dataSource.getConnection()) {
             return operation.run(connection);
         } catch (SQLException failure) {
+            if (RECONNECTABLE_STATES.contains(Objects.toString(failure.getSQLState(), ""))) {
+                throw new JobQueue.Unavailable(failure);
+            }
             throw new IllegalStateException("Could not access the durable job queue", failure);
         }
     }

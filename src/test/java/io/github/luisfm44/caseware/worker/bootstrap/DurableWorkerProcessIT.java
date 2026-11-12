@@ -19,8 +19,12 @@ import org.postgresql.ds.PGSimpleDataSource;
 
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
+import java.net.ConnectException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
@@ -37,6 +41,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
+import javax.net.SocketFactory;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -172,6 +177,38 @@ class DurableWorkerProcessIT {
     }
 
     @Test
+    void twoJvmsLetAStatusLookupOutliveTheSubmissionLeaseAndThenReleaseCapacity() throws Exception {
+        int leaseMillis = 200;
+        try (var manager = new RecordingManager(FirstRequest.HOLD_ALL_REPLIES, true);
+                var first = startWorker(manager.url(), "first", 1, leaseMillis)) {
+            eventually(first, () -> assertThat(manager.active()).isEqualTo(1));
+            var original = manager.submissions().getFirst();
+
+            try (var second = startWorker(manager.url(), "second", 1, leaseMillis, 8_000)) {
+                assertThat(second.process().pid()).isNotEqualTo(first.process().pid());
+                eventually(second, () -> assertThat(manager.resolutions()).containsExactly(original));
+                manager.completeAndReply(original);
+                eventually(first, () -> assertThat(Files.readString(first.log()))
+                        .contains("Discarded confirmed outcome for attempt " + original.id()));
+
+                // The first JVM can poll again while the second JVM's status response is held.
+                await().pollInterval(Duration.ofMillis(40)).during(Duration.ofMillis(leaseMillis * 3L))
+                        .atMost(Duration.ofSeconds(4)).untilAsserted(() -> {
+                            assertThat(manager.resolutions()).containsExactly(original);
+                            assertThat(manager.submissions()).containsExactly(original);
+                            assertThat(executions(database)).containsExactlyInAnyOrderEntriesOf(
+                                    Map.of(FIRST.engagementId(), new Execution("SUBMITTED", 1, original.id()),
+                                            NEXT.engagementId(), new Execution("READY", 0, null)));
+                        });
+
+                manager.releaseResolutionReplies();
+                completeNextAndVerify(second, manager);
+                assertThat(manager.resolutions()).containsExactly(original);
+            }
+        }
+    }
+
+    @Test
     void anotherJvmCanRetryAfterDownstreamFencesTheLateRequest() throws Exception {
         try (var manager = new RecordingManager(FirstRequest.HOLD_BEFORE_ADMISSION);
                 var first = startWorker(manager.url(), "first")) {
@@ -207,6 +244,54 @@ class DurableWorkerProcessIT {
                 assertThat(manager.submissions()).extracting(Attempt::operation).containsExactly(FIRST, NEXT);
                 assertThat(manager.effects()).containsExactlyInAnyOrderEntriesOf(Map.of(FIRST, 1));
                 assertThat(manager.resolutions()).isEmpty();
+            }
+        }
+    }
+
+    @Test
+    void twoJvmsResumeAfterPostgresDisconnectsBetweenEffectAndSettlement() throws Exception {
+        var disconnected = logs.resolve("postgres-disconnected");
+        workerUrl += "&socketFactory=" + DisconnectableSocketFactory.class.getName()
+                + "&socketFactoryArg=" + URLEncoder.encode(disconnected.toString(), UTF_8);
+
+        try (var manager = new RecordingManager(FirstRequest.HOLD_ALL_REPLIES, true);
+                var first = startWorker(manager.url(), "first")) {
+            eventually(first, () -> assertThat(manager.active()).isEqualTo(1));
+            var original = manager.submissions().getFirst();
+            assertThat(original.operation()).isEqualTo(FIRST);
+
+            try (var second = startWorker(manager.url(), "second", 1, 1_200, 2_000)) {
+                assertThat(first.process().pid()).isNotEqualTo(second.process().pid());
+                // The first JVM is still waiting on its submission reply, so this lookup
+                // proves that the second JVM started consuming from the shared database.
+                eventually(second, () -> assertThat(manager.resolutions()).contains(original));
+
+                manager.recordEffect(original);
+                Files.createFile(disconnected);
+                manager.releaseSubmissionReply(original);
+                manager.releaseResolutionReplies();
+
+                eventually(first, () -> assertThat(Files.readString(first.log()))
+                        .contains("Durable job queue unavailable; will resume from persisted state",
+                                "PostgresJobQueue.settle", "Test PostgreSQL link is disconnected"));
+                eventually(second, () -> assertThat(Files.readString(second.log()))
+                        .contains("Durable job queue unavailable; will resume from persisted state",
+                                "Test PostgreSQL link is disconnected"));
+                assertThat(first.process().isAlive()).isTrue();
+                assertThat(second.process().isAlive()).isTrue();
+                assertThat(executions(database)).containsExactlyInAnyOrderEntriesOf(
+                        Map.of(FIRST.engagementId(), new Execution("SUBMITTED", 1, original.id()),
+                                NEXT.engagementId(), new Execution("READY", 0, null)));
+                assertThat(manager.effects()).containsExactlyEntriesOf(Map.of(FIRST, 1));
+                assertThat(manager.submissions()).containsExactly(original);
+
+                int lookupsDuringOutage = manager.resolutions().size();
+                Files.delete(disconnected);
+                completeNextAndVerify(first, manager);
+
+                assertThat(first.process().isAlive()).isTrue();
+                assertThat(second.process().isAlive()).isTrue();
+                assertThat(manager.resolutions()).hasSizeGreaterThan(lookupsDuringOutage).allMatch(original::equals);
             }
         }
     }
@@ -283,6 +368,11 @@ class DurableWorkerProcessIT {
     }
 
     private WorkerProcess startWorker(String managerUrl, String name, int capacity, int leaseMillis) throws IOException {
+        return startWorker(managerUrl, name, capacity, leaseMillis, 30_000);
+    }
+
+    private WorkerProcess startWorker(String managerUrl, String name, int capacity, int leaseMillis, int httpTimeoutMillis)
+            throws IOException {
         var command = new ArrayList<String>();
         command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
         // With the coverage profile, graceful shutdown of the survivor records the code
@@ -295,7 +385,7 @@ class DurableWorkerProcessIT {
                 TemplateFanoutWorkerApplication.class.getName(),
                 "--spring.profiles.active=postgres-worker", "--spring.main.banner-mode=off",
                 "--worker.capacity=" + capacity, "--worker.lease-ms=" + leaseMillis, "--worker.idle-ms=25",
-                "--worker.http-timeout-ms=30000"));
+                "--worker.http-timeout-ms=" + httpTimeoutMillis));
         var output = logs.resolve(name + ".log");
         var builder = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(output.toFile());
         builder.environment().put("FANOUT_DB_URL", workerUrl);
@@ -369,6 +459,44 @@ class DurableWorkerProcessIT {
                     kill();
                 }
             }
+        }
+    }
+
+    /** Cuts only the worker's JDBC link. The test observes PostgreSQL over a separate connection. */
+    public static final class DisconnectableSocketFactory extends SocketFactory {
+
+        private final Path disconnected;
+
+        public DisconnectableSocketFactory(String marker) {
+            disconnected = Path.of(marker);
+        }
+
+        @Override
+        public Socket createSocket() throws IOException {
+            if (Files.exists(disconnected)) {
+                throw new ConnectException("Test PostgreSQL link is disconnected");
+            }
+            return new Socket();
+        }
+
+        @Override
+        public Socket createSocket(String host, int port) {
+            throw new UnsupportedOperationException("The JDBC driver opens an unconnected socket");
+        }
+
+        @Override
+        public Socket createSocket(String host, int port, InetAddress localAddress, int localPort) {
+            throw new UnsupportedOperationException("The JDBC driver opens an unconnected socket");
+        }
+
+        @Override
+        public Socket createSocket(InetAddress host, int port) {
+            throw new UnsupportedOperationException("The JDBC driver opens an unconnected socket");
+        }
+
+        @Override
+        public Socket createSocket(InetAddress host, int port, InetAddress localAddress, int localPort) {
+            throw new UnsupportedOperationException("The JDBC driver opens an unconnected socket");
         }
     }
 
@@ -542,6 +670,15 @@ class DurableWorkerProcessIT {
         synchronized void completeAndReply(Attempt attempt) {
             assertThat(active).contains(attempt);
             apply(attempt);
+            heldReplies.get(attempt).countDown();
+        }
+
+        synchronized void recordEffect(Attempt attempt) {
+            assertThat(active).contains(attempt);
+            apply(attempt);
+        }
+
+        synchronized void releaseSubmissionReply(Attempt attempt) {
             heldReplies.get(attempt).countDown();
         }
 
