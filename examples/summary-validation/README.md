@@ -25,7 +25,7 @@ python3 examples/regional-version-selection/tools/render_evidence.py \
 
 Open `examples/summary-validation/target/evidence/index.html` to see each scenario's result, fixture details, and recorded HTTP requests and responses.
 
-[Summary validation E2E in GitHub Actions](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/summary-validation.yml) runs the same suite. Open a run and download `summary-validation-e2e` from its summary or Artifacts section. Extract the archive and open `evidence/index.html`.
+**Verify and scan** runs the same suite. Download `summary-validation-e2e` from the run, extract it and open `evidence/index.html`. You can also run this suite by itself from its workflow. [Current report on main](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910501976) · [Standalone workflow](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/summary-validation.yml)
 
 ## HTTP outcomes covered by the suite
 

@@ -19,7 +19,7 @@ config:
 ---
 flowchart TB
     accTitle: Proposed regional system architecture
-    accDescr: The template service supplies approved artifact bytes and hashes to the summary service, which verifies and compares them before archiving localized summaries. The firm's updates API selects offers from regional release and engagement data and serves archived summaries with view receipts. A planner publishes verification jobs to regional SQS. The Java worker reconciles them through the engagement manager, which owns downstream admission and effects.
+    accDescr: The template service supplies approved artifact bytes and hashes to the summary service, which verifies and compares them before archiving localized summaries. The firm's updates API selects offers from regional release and engagement data. An offer receipt identifies the offer used for an apply or decline decision. A summary view receipt identifies the archived summary version shown. A planner publishes verification jobs to regional SQS. The Java worker reconciles them through the engagement manager, which owns downstream admission and effects.
 
     subgraph SHARED["Shared template services"]
         direction LR
@@ -40,17 +40,17 @@ flowchart TB
         QUEUE["Regional SQS"]
         WORKER["Java fan-out worker"]
         MANAGER["Engagement manager<br/>Shared admission and effects"]
-        FIRM[("Firm database<br/>Index, decisions and view receipts")]
+        FIRM[("Firm database<br/>Index, decisions and summary view receipts")]
 
         CATALOG --> API
         EVIDENCE -->|"Archived summary and locale"| API
-        AUDITOR -->|"List, inspect, decide"| API
-        API -->|"Read index and save receipts"| FIRM
+        AUDITOR -->|"Inspect offer or submit decision"| API
+        API -->|"Read index and record summary views"| FIRM
         CATALOG --> PLANNER
         PLANNER -->|"Queue flagged work"| QUEUE
         QUEUE -->|"Deliver verification job"| WORKER
         WORKER -->|"Submit or query status"| MANAGER
-        API -->|"Submit a decision"| MANAGER
+        API -->|"Apply or decline with offer receipt"| MANAGER
         MANAGER -->|"Commit verified metadata"| FIRM
     end
 
@@ -70,9 +70,9 @@ flowchart TB
 | Area | Proposed responsibility |
 | --- | --- |
 | Template service and regional catalog | Commit the release and outbox revision in one transaction. Regional consumers ignore older revisions and fetch a catalog snapshot on gaps. |
-| Regional updates API | Derive firm and file access from the authenticated session. Use the active release, the verified effective version and prior decisions to select the offer and exact summary pair. Record the archived summary version and locale shown to the auditor in a regional view receipt. |
+| Regional updates API | Derive firm and file access from the authenticated session. Use the active release, the verified effective version and prior decisions to select the offer and exact summary pair. Return an offer receipt for the apply or decline decision. Record the archived summary version and locale shown to the auditor in a separate view receipt. |
 | Summary service and regional evidence | Use approved template artifacts to verify the comparison, render a localized summary and archive each promoted version with its source hashes. Replicate promoted versions to regional evidence stores so the regional API can retrieve the version cited by a receipt. |
-| Engagement manager | Own file creation, opening and decisions. Enforce admission for the actual downstream pool, validate the expected engagement revision, deduplicate effects and provide authoritative status. The template authority orders decision admission against withdrawal. |
+| Engagement manager | Own file creation, opening and decisions. Validate the original offer before admitting a new decision and replay an accepted decision idempotently. The template authority orders decision admission against withdrawal. Enforce admission for the actual downstream pool, validate the expected engagement revision, deduplicate effects and provide authoritative status. |
 | Regional exception planner | Plan jobs for unknown or flagged baselines against the publication's pinned engagement snapshot. Commit each page and its outbox records in the same transaction. |
 | Regional Java worker | Claim deliveries in a durable execution ledger, reserve authorizations against the attempt budget, reconcile uncertain outcomes and acknowledge SQS after committing a terminal result. The engagement manager admits work against the shared downstream limit. |
 
@@ -80,11 +80,46 @@ flowchart TB
 
 | Repository entry point | Verified behavior | Regional acceptance |
 | --- | --- | --- |
-| [Regional version selection](../examples/regional-version-selection/README.md) | HTTP scenarios cover the offer and summary pair, exact declines, withdrawals, apply outcomes and firm isolation. | Validate the deployed offer, authorization and engagement contracts. |
+| [Regional version selection](../examples/regional-version-selection/README.md) | HTTP scenarios cover the offer and summary pair, receipt validation and decision replay, withdrawals, apply outcomes and firm isolation. | Validate the deployed offer, authorization and engagement contracts. |
 | [Summary validation](../examples/summary-validation/README.md) | HTTP scenarios cover byte-hash validation, exact changes, grouping rejection and fallback, editor review and localized receipt replay. | Validate the deployed artifact store, renderer and durable archive. The reference API keeps its archive and receipts in memory. |
 | [Connected reference APIs](../examples/connected-reference-apis/README.md) | A test driver forwards the offered pair, checks the exact localized artifact and its pinned receipt, skips summary generation when there is no offer, and observes rejection of changed bytes. | Validate the deployed service-to-service contract and recover the original receipt after process restarts. |
 
-Both reference APIs start a local HTTP server with synthetic fixtures. The connected suite drives both servers in the same test run. Regional deployment acceptance has its own criteria. [Reports and screenshots](evidence/README.md) · [Regional acceptance criteria](owner-acceptance.md)
+Both reference APIs start a local HTTP server with synthetic fixtures. In the connected suite, the test driver reads the regional offer and sends its comparison pair to the summary reference API. This is a local test flow. Regional deployment acceptance has its own criteria. [Connected mock sequence](../examples/connected-reference-apis/README.md#connected-reference-apis) · [Reports and screenshots](evidence/README.md) · [Regional acceptance criteria](owner-acceptance.md)
+
+### Offer receipt and decision replay in the regional reference API
+
+For an eligible offer on a file visible to the authenticated firm, the reference API returns an opaque `receiptId` with the offered pair. The engagement manager fixture binds it to the firm, file, engagement revision, catalog revision and exact baseline and target. It validates and records a new decision under the same lock used for catalog publication. A repeat of an admitted action returns the recorded decision.
+
+```mermaid
+---
+config:
+  theme: neutral
+  sequence:
+    mirrorActors: false
+---
+sequenceDiagram
+    participant C as Authenticated test client
+    participant R as Regional reference API
+    participant M as Engagement manager fixture
+
+    C->>R: GET /engagements/{id}/offer
+    R->>M: Store receipt for the eligible offer
+    R-->>C: Offer, summary pair and receiptId
+    C->>R: POST apply or decline with receiptId
+    R->>M: Admit or replay the decision for this firm and file
+    alt Same action already admitted
+        M-->>R: Return the recorded decision
+        R-->>C: HTTP 202 for apply or 204 for decline
+    else Unused receipt and current offer
+        M-->>R: Validate and atomically record a new decision
+        R-->>C: HTTP 202 for apply or 204 for decline
+    else Stale or conflicting receipt
+        M-->>R: Reject the decision
+        R-->>C: HTTP 409
+    end
+```
+
+The offer receipt identifies the original offer evaluated for the decision. The summary view receipt pins the localized artifact shown to the auditor. The local fixtures keep their records in memory. [Offer API contract](../examples/regional-version-selection/README.md#make-a-decision-with-the-original-receipt) · [Regional acceptance criteria](owner-acceptance.md#regional-updates-api)
 
 ### Summary generation and receipt replay
 

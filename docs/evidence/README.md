@@ -1,15 +1,18 @@
 # Caseware feedback and test evidence
 
-The baseline is [commit `b80c148` on `main`](https://github.com/luisfm44/caseware-template-fanout-worker/commit/b80c1483c7e6380249fb2815281db0feff26ee84). The linked CI archives were checked against their Surefire and Failsafe results. All 105 tests across the worker and both reference APIs passed with zero failures, errors or skips.
+The [CI run](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632) for commit `362ef1c` on `main` passed all six jobs. The downloaded Surefire and Failsafe results record **118 passing tests** with zero failures, errors or skips.
 
 | CI evidence | Verified result | Open the report |
 | --- | --- | --- |
-| Worker build and tests | **48 unit tests and 29 PostgreSQL integration tests**. Includes four worker process scenarios, four snapshot scenarios and the executable demo entry point. | [Test reports and worker JAR](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129499/artifacts/13905974454) · [Workflow run](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129499) |
-| Worker quality | **SonarQube Quality Gate passed**. JaCoCo line and branch coverage and SonarQube overall worker coverage are 100%. | [Coverage and SonarQube reports](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129499/artifacts/13906113674) · [Quality job](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129499/job/130905216055) |
-| Regional version selection reference API | **13 HTTP scenarios** with a controlled regional catalog and engagement manager. | [HTML report and Surefire XML](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129446/artifacts/13906906514) · [Workflow history](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/regional-version-selection.yml) · [Scenario screenshots](issue-26/README.md) |
-| Summary validation reference API | **15 HTTP scenarios** with synthetic approved templates and a scripted grouping provider. | [HTML report and Surefire XML](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129467/artifacts/13907106040) · [Workflow history](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/summary-validation.yml) |
+| Worker build and tests | **48 unit tests and 31 PostgreSQL integration tests**. Includes six worker process scenarios, four snapshot scenarios and the executable demo entry point. | [Test reports and worker JAR](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910411563) |
+| Worker quality | **SonarQube Quality Gate passed**. JaCoCo line and branch coverage and SonarQube overall worker coverage are 100%. | [Coverage and SonarQube reports](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910676292) |
+| Regional version selection | **21 HTTP scenarios** with a controlled catalog and engagement manager. Includes stale offer receipts, scope and idempotent replay. | [HTML and Surefire XML](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910591752) |
+| Summary validation | **15 HTTP scenarios** with approved template fixtures and scripted grouping. | [HTML and Surefire XML](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910501976) |
+| Connected reference APIs | **3 HTTP scenarios** with a test driver forwarding the offered pair to summary validation. | [HTML and Surefire XML](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910556286) |
 
-In the worker archive, look for `TEST-*.xml` under `surefire-reports/` and `failsafe-reports/`. In the quality archive, open `site/jacoco/index.html` and `sonar-quality/summary.md`. For either HTTP suite, extract the archive and open `evidence/index.html`. Each scenario links to its fixture, assertion summary and captured HTTP responses. Artifact downloads require access to the repository and expire according to the workflow retention setting. Open a newer successful run or use the local commands below when an archive expires.
+Find the worker XML under `surefire-reports/` and `failsafe-reports/`. The quality archive contains `site/jacoco/index.html` and `sonar-quality/summary.md`. For any of the three HTTP suites, extract the archive and open `evidence/index.html` for the scenarios, fixtures and captured responses. GitHub applies the workflow retention periods to these downloads. Use a newer run or the local commands below when an archive expires. [Verify and scan history](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/ci.yml) · [Artifact retention](../pipelines.md)
+
+The previous baseline at `b80c148` recorded 105 tests before the late-lease, offer-receipt and connected-flow changes. The #26 screenshots show the original 13 regional scenarios. [Historical CI run](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129499) · [Historical screenshots](issue-26/README.md)
 
 ## Feedback, implementation and acceptance
 
@@ -48,7 +51,7 @@ The full profile runs the unit and PostgreSQL integration suites. The final Mave
 
 The executable demo uses one JVM with two logical workers, a simulated downstream and a disposable PostgreSQL schema. Its smoke test asserts seven completions, seven effects, zero duplicates, a peak of three and one reconciliation. [Demo command and report](../../README.md#postgresql-integration-tests-and-executable-demo)
 
-## Reproduce the two HTTP suites
+## Reproduce the standalone HTTP suites
 
 Use JDK 25. Each suite starts its own Spring Boot server on loopback, sends real HTTP requests and generates Surefire XML. Python 3 renders that XML and the captured exchanges into the HTML scenario report.
 
@@ -57,7 +60,7 @@ Use JDK 25. Each suite starts its own Spring Boot server on loopback, sends real
 ./mvnw -f examples/summary-validation/pom.xml -DfailIfNoTests=true clean test
 ```
 
-- **Regional version selection** uses controlled catalog releases, authenticated firm and file context and a manager with controllable baseline and apply status. The suite asserts exact offers and holds, withdrawal and replacement, scoped declines, and when confirmed success advances the baseline. [Generate the regional report](../../examples/regional-version-selection/README.md)
+- **Regional version selection** uses controlled catalog releases, authenticated firm and file context and a manager with controllable baseline and apply status. The suite asserts exact offers and holds, withdrawal and replacement, scoped declines, the original offer receipt, and when confirmed success advances the baseline. [Generate the regional report](../../examples/regional-version-selection/README.md)
 - **Summary validation** varies the approved v4 and v7 bytes, grouping output and provider outcome. It checks C17 and C18 only, complete rules on failure, the editorial hold and the exact French v7 artifact returned after v8 is promoted. [Generate the summary report](../../examples/summary-validation/README.md)
 
 ## Reproduce the connected HTTP flow
@@ -68,6 +71,6 @@ Run both standalone suites and the three connected scenarios in one Maven reacto
 ./mvnw -f examples/pom.xml -DfailIfNoTests=true clean test
 ```
 
-The connected test driver forwards the exact regional offer pair and checks the pinned receipt. The summary server records zero generation requests for a withheld offer and returns 422 for changed artifact bytes. The connected workflow publishes the captured HTTP exchanges and Surefire XML. [Run and generate the connected report](../../examples/connected-reference-apis/README.md)
+The connected test driver forwards the exact regional offer pair and checks the original summary view receipt after a later revision. The summary server records zero generation requests for a withheld offer and returns 422 for changed artifact bytes. The connected workflow publishes the captured HTTP exchanges and Surefire XML. [Run and generate the connected report](../../examples/connected-reference-apis/README.md)
 
 A deployed region has separate acceptance criteria for service-to-service calls, durable archive recovery, SQS delivery and downstream admission. [System architecture](../system-architecture.md) · [Regional acceptance](../owner-acceptance.md) · [Regional rollout verification](../regional-verification.md)
