@@ -18,9 +18,9 @@ import io.github.luisfm44.caseware.worker.execution.port.JobQueue;
 public final class PostgresJobQueue implements JobQueue {
 
     private static final int MAX_SUBMISSIONS = 3;
-    private static final String CURRENT_CLAIM = """
+    private static final String MATCHING_CLAIM = """
             WHERE firm_id = ? AND publication_id = ? AND engagement_id = ? AND engagement_revision = ?
-              AND claim_token = ? AND claim_until > clock_timestamp()
+              AND claim_token = ?
             """;
 
     private final DataSource dataSource;
@@ -213,7 +213,9 @@ public final class PostgresJobQueue implements JobQueue {
                     SET claim_token = NULL, claim_until = NULL,
                         available_at = clock_timestamp() + (? * INTERVAL '1 millisecond'),
                         poll_count = CASE WHEN attempt_id IS NULL THEN 0 ELSE LEAST(poll_count + 1, 30) END
-                    """ + CURRENT_CLAIM)) {
+                    """ + MATCHING_CLAIM + """
+                      AND claim_until > clock_timestamp()
+                    """)) {
                 statement.setLong(1, delay.toMillis());
                 bindClaim(statement, 2, claim);
                 return statement.executeUpdate();
@@ -223,11 +225,11 @@ public final class PostgresJobQueue implements JobQueue {
 
     /** Persists the confirmed outcome and returns the slot with one atomic row update. */
     @Override
-    public void settle(Claim claim, UUID attemptId, Outcome outcome, Duration nextDelay) {
+    public boolean settle(Claim claim, UUID attemptId, Outcome outcome, Duration nextDelay) {
         if (outcome == Outcome.PENDING) {
             throw new IllegalArgumentException("an uncertain outcome cannot release a reservation");
         }
-        query(connection -> {
+        return query(connection -> {
             try (var statement = connection.prepareStatement("""
                     UPDATE fanout_job
                     SET execution_state = CASE
@@ -237,7 +239,7 @@ public final class PostgresJobQueue implements JobQueue {
                         END,
                         available_at = clock_timestamp() + (? * INTERVAL '1 millisecond'),
                         attempt_id = NULL, authorized_at = NULL, claim_token = NULL, claim_until = NULL, poll_count = 0
-                    """ + CURRENT_CLAIM + """
+                    """ + MATCHING_CLAIM + """
                       AND attempt_id = ?
                     """)) {
                 statement.setString(1, outcome.name());
@@ -246,7 +248,7 @@ public final class PostgresJobQueue implements JobQueue {
                 statement.setLong(4, nextDelay.toMillis());
                 bindClaim(statement, 5, claim);
                 statement.setObject(10, attemptId);
-                return statement.executeUpdate();
+                return statement.executeUpdate() == 1;
             }
         });
     }

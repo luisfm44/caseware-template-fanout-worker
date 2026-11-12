@@ -16,8 +16,11 @@ public interface JobQueue {
     /** Releases the claim for a later poll while retaining the attempt and its reservation. */
     void defer(Claim claim, Duration delay);
 
-    /** Records a confirmed outcome and releases its capacity reservation. */
-    void settle(Claim claim, UUID attemptId, Outcome outcome, Duration nextDelay);
+    /**
+     * Records a confirmed outcome and releases its reservation if the claim token and attempt still match.
+     * Returns false when the claim or attempt is no longer current. Lease expiry alone does not prevent settlement.
+     */
+    boolean settle(Claim claim, UUID attemptId, Outcome outcome, Duration nextDelay);
 
     record Claim(OperationId operationId, UUID token, UUID attemptId, int submissions, int pollCount,
             boolean reconciling) {}
