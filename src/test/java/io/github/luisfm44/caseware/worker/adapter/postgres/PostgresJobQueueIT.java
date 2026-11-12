@@ -68,9 +68,9 @@ class PostgresJobQueueIT {
             assertThat(recovered.submissions()).isEqualTo(number);
             assertThat(recovered.token()).isNotEqualTo(claim.token());
 
-            original.settle(claim, attempt, Outcome.APPLIED, NOW);
+            assertThat(original.settle(claim, attempt, Outcome.APPLIED, NOW)).isFalse();
             assertThat(state(FIRST)).isEqualTo("SUBMITTED");
-            restarted.settle(recovered, attempt, Outcome.NOT_APPLIED, NOW);
+            assertThat(restarted.settle(recovered, attempt, Outcome.NOT_APPLIED, NOW)).isTrue();
         }
 
         assertThat(state(FIRST)).isEqualTo("RETRY_LIMIT");

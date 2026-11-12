@@ -56,8 +56,9 @@ public final class DurableWorker {
 
         if (reply.outcome() == Outcome.PENDING) {
             jobs.defer(claim, delay(claim.pollCount(), reply.retryAfter()));
-        } else {
-            jobs.settle(claim, attempt, reply.outcome(), delay(claim.submissions() - 1, reply.retryAfter()));
+        } else if (!jobs.settle(claim, attempt, reply.outcome(), delay(claim.submissions() - 1, reply.retryAfter()))) {
+            LOGGER.log(System.Logger.Level.INFO, "Discarded confirmed outcome for attempt {0} after losing its claim",
+                    attempt);
         }
     }
 

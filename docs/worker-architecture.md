@@ -49,7 +49,7 @@ flowchart TB
 2. [`PostgresJobQueue`][queue] first reclaims eligible attempts whose claims expired or were deferred. For new work it locks the pool row, checks for an available slot, selects the next eligible firm, leases a job and records an authorized attempt. The reservation and firm cursor advance in the same transaction.
 3. [`DurableWorker`][durable-worker] submits a new attempt through [`HttpAttemptTransport`][http-transport]. A reclaimed attempt goes to the status endpoint with its original operation and attempt IDs. A pending or uncertain response defers the next lookup while preserving the reservation. A confirmed result settles the attempt and frees capacity.
 
-The claim lease controls which process may write the result. An expired claim can be taken over while the downstream operation still occupies its slot. The durable attempt budget counts authorizations, including a process exit before an HTTP call. The regional deployment depends on an engagement manager that validates the engagement revision and owns authoritative status, idempotency and the regional capacity limit. [Durable worker design](worker-design.md#durable-consumption-and-shared-capacity) · [Proposed regional architecture](system-architecture.md)
+Lease expiry allows another process to replace the claim token while the downstream operation still occupies its slot. A confirmed result can settle while the token and attempt ID still match, including after lease expiry. Once the token is replaced, the old worker reports the lost claim and leaves settlement to the new claimant. The durable attempt budget counts authorizations, including a process exit before an HTTP call. The regional deployment depends on an engagement manager that validates the engagement revision and owns authoritative status, idempotency and the regional capacity limit. [Durable worker design](worker-design.md#durable-consumption-and-shared-capacity) · [Proposed regional architecture](system-architecture.md)
 
 ## Package structure
 
@@ -78,7 +78,7 @@ The claim lease controls which process may write the result. An expired claim ca
 | [`SharedAdmissionTest`][test] | Creates two workers with the same dependencies, makes them compete for the last slot and verifies that the peak is three. It also verifies slot retention after a caller timeout. |
 | [`PublicationFanout`][planner] and [`EngagementSource`][source] | Read bounded, stable pages of eligible engagements and produce job IDs. |
 | [`PostgresFanoutStore`][store] | Persists each page's jobs and snapshot checkpoint in one transaction. |
-| [`PostgresJobQueue`][queue] and [`JobQueue`][job-port] | Claim due attempts and reserve schema-wide capacity for fresh jobs in firm rotation. The queue checks the current lease on defer and settlement. |
+| [`PostgresJobQueue`][queue] and [`JobQueue`][job-port] | Claim due attempts and reserve schema-wide capacity for fresh jobs in firm rotation. The queue checks the live lease for defer and the current token and attempt ID for settlement. |
 | [`HttpAttemptTransport`][http-transport] and [`AttemptTransport`][attempt-port] | Submit and resolve authorized attempts over HTTP using the stable operation ID and attempt ID. |
 | [`RetryingDownstreamClient`][retry] and [`DownstreamTransport`][transport] | Apply the retry policy and submit or reconcile a downstream operation by ID. |
 | [`TemplateFanoutWorkerApplication`][boot] | Starts Spring Boot 4.1.2 and discovers the runner for the selected profile. |
@@ -178,6 +178,8 @@ Run the process suite with JDK 25 and PostgreSQL started as described in [Run lo
 | Scenario | Observed outcome |
 | --- | --- |
 | Process exit with an uncertain attempt | A second JVM reclaims the original attempt. The first JVM is forcibly stopped. During the status outage, the existing attempt remains reserved and the next job waits. When status becomes available, both jobs finish with one effect each and a peak of one active operation. |
+| Confirmed result after lease expiry | With two JVMs running, the first JVM records a late confirmation while it still holds the stored token. The next job runs, each operation has one effect, and the peak is one. |
+| Confirmed result after claim replacement | The first JVM receives a late confirmation after the second JVM replaces the token. Its update changes zero rows. The next job waits until the second JVM settles the same attempt. Each operation has one effect and the peak is one. |
 | Fenced delayed request | The downstream confirms no effect and fences the old attempt. It rejects the delayed request when delivered. The surviving JVM retries with a different attempt ID under the same operation ID. The final effect count is one per operation. |
 | Stale engagement revision | The controlled downstream rejects the stale operation without an effect. The worker records the terminal rejection. |
 | Small firm joins a large backlog | Two JVMs fill a pool of two. The small firm receives the next free slot while 30 large-firm jobs remain ready. The large firm resumes after that turn and the measured peak stays at two. |

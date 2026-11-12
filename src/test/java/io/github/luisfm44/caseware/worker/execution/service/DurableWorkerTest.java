@@ -36,6 +36,7 @@ class DurableWorkerTest {
         var recovering = new Claim(OPERATION, CLAIM_TOKEN, ATTEMPT, 1, 1, true);
         when(transport.submit(OPERATION, ATTEMPT)).thenReturn(new Reply(Outcome.APPLIED, Duration.ZERO));
         when(transport.resolve(OPERATION, ATTEMPT)).thenReturn(new Reply(Outcome.PENDING, Duration.ofSeconds(2)));
+        when(jobs.settle(fresh, ATTEMPT, Outcome.APPLIED, Duration.ofMillis(100))).thenReturn(true);
 
         worker.process(fresh);
         worker.process(recovering);
@@ -48,6 +49,7 @@ class DurableWorkerTest {
     void settlesAuthoritativeNoEffectWithSubmissionBackoff() throws Exception {
         var claim = new Claim(OPERATION, CLAIM_TOKEN, ATTEMPT, 3, 10, true);
         when(transport.resolve(OPERATION, ATTEMPT)).thenReturn(new Reply(Outcome.NOT_APPLIED, Duration.ZERO));
+        when(jobs.settle(claim, ATTEMPT, Outcome.NOT_APPLIED, Duration.ofMillis(400))).thenReturn(true);
 
         worker.process(claim);
 
@@ -75,7 +77,7 @@ class DurableWorkerTest {
         when(transport.resolve(OPERATION, ATTEMPT)).thenReturn(new Reply(Outcome.APPLIED, Duration.ZERO));
         doAnswer(ignored -> {
             Thread.currentThread().interrupt();
-            return null;
+            return true;
         }).when(jobs).settle(claim, ATTEMPT, Outcome.APPLIED, Duration.ofMillis(100));
 
         try {

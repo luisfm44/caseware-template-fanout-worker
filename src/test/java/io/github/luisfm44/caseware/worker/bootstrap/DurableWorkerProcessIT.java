@@ -114,6 +114,64 @@ class DurableWorkerProcessIT {
     }
 
     @Test
+    void settlesAnExpiredClaimBeforeTakeoverAndFreesCapacityForTheNextJob() throws Exception {
+        try (var manager = new RecordingManager(FirstRequest.HOLD_ALL_REPLIES);
+                var first = startWorker(manager.url(), "first", 1, 60_000)) {
+            eventually(first, () -> assertThat(manager.active()).isEqualTo(1));
+            var original = manager.submissions().getFirst();
+            assertThat(original.operation()).isEqualTo(FIRST);
+
+            try (var second = startWorker(manager.url(), "second", 1, 60_000)) {
+                assertThat(second.process().pid()).isNotEqualTo(first.process().pid());
+                eventually(second, () -> assertThat(Files.readString(second.log()))
+                        .contains("Started TemplateFanoutWorkerApplication"));
+                // Keep the expired claim unreclaimed so settlement and takeover can be tested separately.
+                execute(database, """
+                        UPDATE fanout_job
+                        SET claim_until = clock_timestamp() - INTERVAL '1 second',
+                            available_at = clock_timestamp() + INTERVAL '1 day'
+                        WHERE engagement_id = 'engagement-1'
+                        """);
+                manager.completeAndReply(original);
+
+                completeNextAndVerify(first, manager);
+                assertThat(manager.resolutions()).isEmpty();
+            }
+        }
+    }
+
+    @Test
+    void rejectsTheOldResultAfterAnotherJvmTakesOverAndKeepsCapacityReserved() throws Exception {
+        try (var manager = new RecordingManager(FirstRequest.HOLD_ALL_REPLIES, true);
+                var first = startWorker(manager.url(), "first", 1, 60_000)) {
+            eventually(first, () -> assertThat(manager.active()).isEqualTo(1));
+            var original = manager.submissions().getFirst();
+            assertThat(original.operation()).isEqualTo(FIRST);
+            execute(database, """
+                    UPDATE fanout_job SET claim_until = clock_timestamp() - INTERVAL '1 second'
+                    WHERE engagement_id = 'engagement-1'
+                    """);
+
+            try (var second = startWorker(manager.url(), "second", 1, 60_000)) {
+                assertThat(second.process().pid()).isNotEqualTo(first.process().pid());
+                eventually(second, () -> assertThat(manager.resolutions()).containsExactly(original));
+
+                manager.completeAndReply(original);
+                eventually(first, () -> assertThat(Files.readString(first.log()))
+                        .contains("Discarded confirmed outcome for attempt " + original.id()));
+                assertThat(executions(database)).containsExactlyInAnyOrderEntriesOf(
+                        Map.of(FIRST.engagementId(), new Execution("SUBMITTED", 1, original.id()),
+                                NEXT.engagementId(), new Execution("READY", 0, null)));
+                assertThat(manager.submissions()).containsExactly(original);
+                assertThat(manager.effects()).containsExactlyEntriesOf(Map.of(FIRST, 1));
+
+                manager.releaseResolutionReplies();
+                completeNextAndVerify(second, manager);
+            }
+        }
+    }
+
+    @Test
     void anotherJvmCanRetryAfterDownstreamFencesTheLateRequest() throws Exception {
         try (var manager = new RecordingManager(FirstRequest.HOLD_BEFORE_ADMISSION);
                 var first = startWorker(manager.url(), "first")) {
@@ -188,6 +246,13 @@ class DurableWorkerProcessIT {
             assertThat(manager.submissions().get(3).operation().firmId()).isEqualTo(PUBLICATION.firmId());
             assertThat(manager.peak()).isEqualTo(2);
         }
+    }
+
+    private void completeNextAndVerify(WorkerProcess worker, RecordingManager manager) throws IOException {
+        eventually(worker, () -> assertThat(manager.submissions()).extracting(Attempt::operation)
+                .containsExactly(FIRST, NEXT));
+        manager.completeAndReply(manager.submissions().get(1));
+        expectSuccessfulJobs(worker, manager, 1);
     }
 
     private void expectSuccessfulJobs(WorkerProcess worker, RecordingManager manager, int firstSubmissions)
@@ -314,6 +379,7 @@ class DurableWorkerProcessIT {
         private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
         private final CountDownLatch dropFirstReply = new CountDownLatch(1);
         private final CountDownLatch deliverDelayedRequest = new CountDownLatch(1);
+        private final CountDownLatch resolutionReplies;
         private final List<Attempt> submissions = new ArrayList<>();
         private final List<Attempt> resolutions = new ArrayList<>();
         private final Map<OperationId, Integer> effects = new HashMap<>();
@@ -328,7 +394,12 @@ class DurableWorkerProcessIT {
         private int peak;
 
         private RecordingManager(FirstRequest firstRequest) throws IOException {
+            this(firstRequest, false);
+        }
+
+        private RecordingManager(FirstRequest firstRequest, boolean holdResolutionReplies) throws IOException {
             this.firstRequest = firstRequest;
+            resolutionReplies = new CountDownLatch(holdResolutionReplies ? 1 : 0);
             server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
             server.setExecutor(executor);
             server.createContext("/submit", this::submit);
@@ -391,6 +462,10 @@ class DurableWorkerProcessIT {
         private void resolve(HttpExchange exchange) throws IOException {
             try (exchange) {
                 var attempt = readAttempt(exchange);
+                synchronized (this) {
+                    resolutions.add(attempt);
+                }
+                awaitLatch(resolutionReplies);
                 var outcome = status(attempt);
                 if (outcome == null) {
                     reply(exchange, 503, "status unavailable");
@@ -401,7 +476,6 @@ class DurableWorkerProcessIT {
         }
 
         private synchronized String status(Attempt attempt) {
-            resolutions.add(attempt);
             if (!statusAvailable) {
                 unavailableLookups++;
                 return null;
@@ -431,6 +505,10 @@ class DurableWorkerProcessIT {
 
         void deliverDelayedRequest() {
             deliverDelayedRequest.countDown();
+        }
+
+        void releaseResolutionReplies() {
+            resolutionReplies.countDown();
         }
 
         synchronized Set<Attempt> fenced() {
@@ -523,6 +601,7 @@ class DurableWorkerProcessIT {
         public void close() {
             dropFirstReply.countDown();
             deliverDelayedRequest.countDown();
+            releaseResolutionReplies();
             synchronized (this) {
                 heldReplies.values().forEach(CountDownLatch::countDown);
             }
