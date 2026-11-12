@@ -74,12 +74,36 @@ SCENARIOS = (
     Scenario("baselineAdvancesOnlyAfterTheManagerConfirmsSuccess(ApplyStatus)[2]",
              "application-confirmed", "Pending application that succeeds",
              "The confirmed version stays at v4 during PENDING and advances to v7 after APPLIED."),
-    Scenario("rejectsAStaleTargetBeforeCallingTheManager",
+    Scenario("rejectsAStaleTargetWithoutRecordingADecision",
              "stale-target", "Decision for a stale target",
-             "The API returns 409 for requests to apply or decline v7 while the current offer is v8."),
+             "The API returns 409 for the original receipt while the current offer is v8 and records no decision."),
     Scenario("usesTheAuthenticatedFirmAndKeepsAnotherFirmsFileOutOfReach",
              "firm-isolation", "Authentication and firm isolation",
              "The API returns 401 without authentication, 404 for another firm's file, and 200 for the firm that owns it."),
+    Scenario("rejectsAStaleReceiptEvenWhenTheTargetHasNotChanged(String)[1]",
+             "stale-baseline", "Baseline changes with the same target",
+             "Both decisions return 409 for the v4 → v7 receipt. The valid new offer is v5 → v7."),
+    Scenario("rejectsAStaleReceiptEvenWhenTheTargetHasNotChanged(String)[2]",
+             "stale-engagement-revision", "Engagement revision changes with the same version pair",
+             "Both decisions return 409. The version pair stays v4 → v7 and requires a fresh receipt."),
+    Scenario("rejectsAStaleReceiptEvenWhenTheTargetHasNotChanged(String)[3]",
+             "stale-catalog-epoch", "Catalog epoch changes with the same version pair",
+             "Both decisions return 409 for the earlier epoch. The new epoch can issue a fresh v4 → v7 receipt."),
+    Scenario("rejectsNewDecisionsAfterWithdrawalAndReplaysEarlierAdmission",
+             "receipt-withdrawal", "Withdrawal and replay ordering",
+             "Withdrawal rejects unused receipts. An earlier admission replays its original decision and can finish."),
+    Scenario("admitsConcurrentReplaysOnlyOnce",
+             "concurrent-receipt-replay", "Concurrent apply replay",
+             "Two requests using one receipt return the same decision ID. Another receipt and the opposite action are rejected."),
+    Scenario("replaysADeclineWithoutAdmittingTheOppositeDecision",
+             "decline-replay", "Decline replay",
+             "Both identical declines return 204. A later apply using that receipt returns 409."),
+    Scenario("requiresTheReceiptForTheAuthenticatedFirmAndFile",
+             "receipt-scope", "Receipt scope and required input",
+             "A receipt scoped to another accessible file or firm returns 409. A target-only request returns 400."),
+    Scenario("preservesANewerEngagementRevisionWhenAnOlderApplicationFinishes",
+             "application-revision-conflict", "Newer revision during pending apply",
+             "The fixture reports a revision conflict as FAILED and keeps the newer confirmed baseline."),
 )
 
 
@@ -273,7 +297,7 @@ def render_index(results, scenarios, title, issue):
 
 def read_manifest(path):
     if path is None:
-        return 26, "Regional mockup results", SCENARIOS
+        return 34, "Regional mockup results", SCENARIOS
     data = json.loads(path.read_text(encoding="utf-8"))
     try:
         issue = int(data["issue"])

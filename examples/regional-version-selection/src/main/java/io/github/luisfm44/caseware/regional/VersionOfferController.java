@@ -1,6 +1,7 @@
 package io.github.luisfm44.caseware.regional;
 
 import java.security.Principal;
+import java.util.UUID;
 
 import io.github.luisfm44.caseware.regional.EngagementManager.ApplyDecision;
 import io.github.luisfm44.caseware.regional.VersionOffers.Offer;
@@ -31,14 +32,14 @@ final class VersionOfferController {
 
     @PostMapping("/decline")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    void decline(Principal principal, @PathVariable String engagementId, @RequestBody TargetRequest request) {
-        offers.decline(principal.getName(), engagementId, request.target());
+    void decline(Principal principal, @PathVariable String engagementId, @RequestBody DecisionRequest request) {
+        offers.decline(principal.getName(), engagementId, request.receiptId());
     }
 
     @PostMapping("/apply")
     @ResponseStatus(HttpStatus.ACCEPTED)
-    ApplyDecision apply(Principal principal, @PathVariable String engagementId, @RequestBody TargetRequest request) {
-        return offers.apply(principal.getName(), engagementId, request.target());
+    ApplyDecision apply(Principal principal, @PathVariable String engagementId, @RequestBody DecisionRequest request) {
+        return offers.apply(principal.getName(), engagementId, request.receiptId());
     }
 
     @GetMapping("/applications/{decisionId}")
@@ -46,5 +47,5 @@ final class VersionOfferController {
         return offers.application(principal.getName(), engagementId, decisionId);
     }
 
-    record TargetRequest(String target) {}
+    record DecisionRequest(UUID receiptId) {}
 }
