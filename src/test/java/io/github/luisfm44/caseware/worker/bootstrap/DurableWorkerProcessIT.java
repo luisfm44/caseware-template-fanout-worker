@@ -217,35 +217,50 @@ class DurableWorkerProcessIT {
     }
 
     @Test
-    void resumesAfterPostgresDisconnectsBetweenEffectAndSettlement() throws Exception {
+    void twoJvmsResumeAfterPostgresDisconnectsBetweenEffectAndSettlement() throws Exception {
         var disconnected = logs.resolve("postgres-disconnected");
         workerUrl += "&socketFactory=" + DisconnectableSocketFactory.class.getName()
                 + "&socketFactoryArg=" + URLEncoder.encode(disconnected.toString(), UTF_8);
 
-        try (var manager = new RecordingManager(FirstRequest.HOLD_ALL_REPLIES);
-                var worker = startWorker(manager.url(), "worker")) {
-            eventually(worker, () -> assertThat(manager.active()).isEqualTo(1));
+        try (var manager = new RecordingManager(FirstRequest.HOLD_ALL_REPLIES, true);
+                var first = startWorker(manager.url(), "first")) {
+            eventually(first, () -> assertThat(manager.active()).isEqualTo(1));
             var original = manager.submissions().getFirst();
             assertThat(original.operation()).isEqualTo(FIRST);
-            manager.recordEffect(original);
-            Files.createFile(disconnected);
-            manager.releaseSubmissionReply(original);
 
-            eventually(worker, () -> assertThat(Files.readString(worker.log()))
-                    .contains("Durable job queue unavailable; will resume from persisted state",
-                            "PostgresJobQueue.settle", "Test PostgreSQL link is disconnected"));
-            assertThat(worker.process().isAlive()).isTrue();
-            assertThat(executions(database)).containsExactlyInAnyOrderEntriesOf(
-                    Map.of(FIRST.engagementId(), new Execution("SUBMITTED", 1, original.id()),
-                            NEXT.engagementId(), new Execution("READY", 0, null)));
-            assertThat(manager.effects()).containsExactlyEntriesOf(Map.of(FIRST, 1));
-            assertThat(manager.submissions()).containsExactly(original);
+            try (var second = startWorker(manager.url(), "second", 1, 1_200, 2_000)) {
+                assertThat(first.process().pid()).isNotEqualTo(second.process().pid());
+                // The first JVM is still waiting on its submission reply, so this lookup
+                // proves that the second JVM started consuming from the shared database.
+                eventually(second, () -> assertThat(manager.resolutions()).contains(original));
 
-            Files.delete(disconnected);
-            completeNextAndVerify(worker, manager);
+                manager.recordEffect(original);
+                Files.createFile(disconnected);
+                manager.releaseSubmissionReply(original);
+                manager.releaseResolutionReplies();
 
-            assertThat(worker.process().isAlive()).isTrue();
-            assertThat(manager.resolutions()).isNotEmpty().allMatch(original::equals);
+                eventually(first, () -> assertThat(Files.readString(first.log()))
+                        .contains("Durable job queue unavailable; will resume from persisted state",
+                                "PostgresJobQueue.settle", "Test PostgreSQL link is disconnected"));
+                eventually(second, () -> assertThat(Files.readString(second.log()))
+                        .contains("Durable job queue unavailable; will resume from persisted state",
+                                "Test PostgreSQL link is disconnected"));
+                assertThat(first.process().isAlive()).isTrue();
+                assertThat(second.process().isAlive()).isTrue();
+                assertThat(executions(database)).containsExactlyInAnyOrderEntriesOf(
+                        Map.of(FIRST.engagementId(), new Execution("SUBMITTED", 1, original.id()),
+                                NEXT.engagementId(), new Execution("READY", 0, null)));
+                assertThat(manager.effects()).containsExactlyEntriesOf(Map.of(FIRST, 1));
+                assertThat(manager.submissions()).containsExactly(original);
+
+                int lookupsDuringOutage = manager.resolutions().size();
+                Files.delete(disconnected);
+                completeNextAndVerify(first, manager);
+
+                assertThat(first.process().isAlive()).isTrue();
+                assertThat(second.process().isAlive()).isTrue();
+                assertThat(manager.resolutions()).hasSizeGreaterThan(lookupsDuringOutage).allMatch(original::equals);
+            }
         }
     }
 
@@ -321,6 +336,11 @@ class DurableWorkerProcessIT {
     }
 
     private WorkerProcess startWorker(String managerUrl, String name, int capacity, int leaseMillis) throws IOException {
+        return startWorker(managerUrl, name, capacity, leaseMillis, 30_000);
+    }
+
+    private WorkerProcess startWorker(String managerUrl, String name, int capacity, int leaseMillis, int httpTimeoutMillis)
+            throws IOException {
         var command = new ArrayList<String>();
         command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
         // With the coverage profile, graceful shutdown of the survivor records the code
@@ -333,7 +353,7 @@ class DurableWorkerProcessIT {
                 TemplateFanoutWorkerApplication.class.getName(),
                 "--spring.profiles.active=postgres-worker", "--spring.main.banner-mode=off",
                 "--worker.capacity=" + capacity, "--worker.lease-ms=" + leaseMillis, "--worker.idle-ms=25",
-                "--worker.http-timeout-ms=30000"));
+                "--worker.http-timeout-ms=" + httpTimeoutMillis));
         var output = logs.resolve(name + ".log");
         var builder = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(output.toFile());
         builder.environment().put("FANOUT_DB_URL", workerUrl);
