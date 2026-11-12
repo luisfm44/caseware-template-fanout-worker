@@ -219,6 +219,44 @@ sequenceDiagram
     Note over B,H: Both jobs applied, one effect each, peak of one
 ```
 
+### Late confirmation test sequence
+
+These two scenarios keep worker A alive and hold its original HTTP reply until the lease expires. PostgreSQL settles a confirmed outcome only if the stored claim token and attempt ID match the worker's update.
+
+```mermaid
+---
+config:
+  theme: neutral
+  sequence:
+    mirrorActors: false
+---
+sequenceDiagram
+    participant A as Worker JVM A
+    participant B as Worker JVM B
+    participant P as Shared PostgreSQL
+    participant H as Controlled HTTP downstream
+
+    A->>P: Claim job 1 and reserve the only slot
+    A->>H: Submit the original attempt
+    Note over A,P: The lease expires with the reply held
+    alt Original token still stored
+        H-->>A: Return confirmed APPLIED for the original attempt
+        A->>P: Settle with the original token and attempt ID
+        P-->>A: Update one row and free the slot
+    else B has replaced the token
+        B->>P: Reclaim the same reserved attempt
+        B->>H: Resolve the original attempt
+        H-->>A: Return confirmed APPLIED for the original attempt
+        A->>P: Try to settle with the replaced token
+        P-->>A: Update zero rows and keep the slot reserved
+        Note over A,P: A logs the discarded outcome
+        H-->>B: Return confirmed APPLIED for the original attempt
+        B->>P: Settle with the new token and original attempt ID
+        P-->>B: Update one row and free the slot
+    end
+    Note over B,H: Job 2 can start, one effect per operation, peak of one
+```
+
 - [`SharedAdmissionTest`][test] measures the downstream concurrency peak and verifies permit retention after a caller timeout.
 - [`PublicationFanoutIT`][planning-test] runs against PostgreSQL and checks resume, replay, rollback and stale checkpoints.
 - [`PublicationSnapshotIT`][snapshot-test] checks that a fresh JVM resumes the same source snapshot after the live source changes. It also checks that an unavailable or mismatched snapshot leaves the checkpoint and committed jobs intact.

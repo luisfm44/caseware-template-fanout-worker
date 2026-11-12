@@ -4,18 +4,18 @@ This Caseware Staff Java take-home demonstrates how to plan a template publicati
 
 ## Caseware feedback and verified results
 
-**Start with the [test evidence guide](docs/evidence/README.md).** It links each feedback point to the implementation, the scenario that verifies it and the remaining regional acceptance work. The evidence below comes from commit `b80c148` on `main`.
+**118 tests passed on `main` at `362ef1c`.** The worker passed the SonarQube Quality Gate with 100% overall coverage and 100% JaCoCo line and branch coverage. [CI run](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632) · [Test evidence guide](docs/evidence/README.md) · [Quality reports](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910676292)
 
 | Feedback | What the tests demonstrate | Report |
 | --- | --- | --- |
-| **Capacity was process-local.** | Two independent JVMs share one PostgreSQL admission pool. With a configured limit of **1**, the downstream measures a peak of **1**, including while an attempt has an unresolved outcome. | [Worker integration results](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129499/artifacts/13905974454) |
-| **There was no scheduling across firms.** | With two slots occupied by a large firm, the small firm gets the next free slot while **30** large-firm jobs are still ready. The peak stays at **2**. | [Worker integration results](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129499/artifacts/13905974454) · [Scenario assertions](docs/worker-architecture.md#verification) |
-| **The job consumer was missing.** | The `postgres-worker` profile leases persisted jobs. After the first JVM is killed, the surviving JVM reconciles the original attempt. The downstream records **one effect per operation** and both jobs reach `APPLIED`. | [Worker integration results](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129499/artifacts/13905974454) |
-| **Version rules and summary checks lacked automated tests.** | Two Spring Boot reference APIs run over real loopback HTTP. **13** scenarios verify version offers and application state. **15** scenarios verify artifact hashes, net changes, promotion, rules fallback and the original receipt. | [Version-selection HTML](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129446/artifacts/13906906514) · [Summary-validation HTML](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129467/artifacts/13907106040) |
+| **Capacity was process-local.** | Two independent JVMs share one PostgreSQL admission pool. With a configured limit of **1**, the downstream measures a peak of **1**, including while an attempt has an unresolved outcome. | [Worker integration results](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910411563) |
+| **There was no scheduling across firms.** | With two slots occupied by a large firm, the small firm gets the next free slot while **30** large-firm jobs are still ready. The peak stays at **2**. | [Worker integration results](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910411563) · [Scenario assertions](docs/worker-architecture.md#verification) |
+| **The job consumer was missing.** | The `postgres-worker` profile leases persisted jobs. After the first JVM is killed, the surviving JVM reconciles the original attempt. The downstream records **one effect per operation** and both jobs reach `APPLIED`. | [Worker integration results](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910411563) |
+| **Version rules and summary checks lacked automated tests.** | **21** regional scenarios verify version offers and decisions tied to the original offer receipt. **15** summary scenarios verify artifact hashes, net changes, promotion, fallback and the original view receipt. **3** connected scenarios exercise both references over HTTP. | [Version-selection HTML](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910591752) · [Summary-validation HTML](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910501976) · [Connected-flow HTML](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910556286) |
 
-**Snapshot recovery** also has a cross-process test. A fresh planner JVM resumes from the stored snapshot ID and cursor after the source changes. An expired or mismatched snapshot halts planning. The worker baseline has **48 unit and 29 PostgreSQL integration tests**, with **100% JaCoCo line and branch coverage** and a passing **SonarQube Quality Gate**. [Worker tests](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129499/artifacts/13905974454) · [Quality reports](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129499/artifacts/13906113674)
+**Worker recovery.** The **48 unit tests and 31 PostgreSQL integration tests** include a fresh planner resuming from its pinned snapshot and two late-confirmation races. An expired lease can still settle while its claim token and attempt match. Once another JVM replaces the token, it reconciles the same attempt and releases the reservation on settlement. [Worker tests](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910411563) · [Process-test assertions](docs/worker-architecture.md#verification)
 
-**Connected reference evidence.** A local test driver forwards the exact regional offer pair to summary validation over HTTP. It checks a pinned French Canadian receipt, zero summary calls for a withheld offer and rejection of changed artifact bytes. A future AWS deployment would need separate verification with its actual service and queue dependencies. [Connected test guide](examples/connected-reference-apis/README.md) · [Regional rollout criteria](docs/regional-verification.md)
+**Connected reference evidence.** A local test driver forwards the exact regional offer pair to summary validation over HTTP. It checks the original French Canadian summary view receipt after a later revision, zero summary calls for a withheld offer and rejection of changed artifact bytes. The regional deployment has separate criteria for its service contracts, durable archive and queue. [Connected test guide](examples/connected-reference-apis/README.md) · [Regional rollout criteria](docs/regional-verification.md)
 
 ## Developer documentation
 
@@ -33,13 +33,13 @@ Planning pins a source snapshot and commits each page of jobs with its checkpoin
 <!-- Image exported from the Mermaid diagram in docs/worker-architecture.md. -->
 ![Durable worker with two independent JVMs sharing PostgreSQL claims and capacity, and a common HTTP downstream.](docs/worker-architecture.svg)
 
-[Distributed crash-test sequence](docs/worker-architecture.md#process-loss-test-sequence) · [Worker design decisions](docs/worker-design.md)
+[Distributed crash-test sequence](docs/worker-architecture.md#process-loss-test-sequence) · [Late-confirmation test sequence](docs/worker-architecture.md#late-confirmation-test-sequence) · [Worker design decisions](docs/worker-design.md)
 
 See the [Java package structure](docs/worker-architecture.md#package-structure) for the application services, contracts, adapters and Spring Boot entry points.
 
 ### Proposed regional system
 
-The system proposal places the worker in a regional background verification flow alongside the template catalog, regional updates API, summary service and engagement manager. The system guide shows which services own the offer, summary artifact, admission and downstream outcome. It also traces the two reference APIs from their controlled fixtures to their observed results. [System architecture](docs/system-architecture.md)
+The system proposal places the worker in a regional background verification flow alongside the template catalog, regional updates API, summary service and engagement manager. The system guide shows who owns the offer receipt for a decision, the view receipt for a displayed summary, and the downstream admission and outcome. It also traces the two reference APIs from their controlled fixtures to their observed results. [System architecture](docs/system-architecture.md) · [Offer receipt and decision replay](docs/system-architecture.md#offer-receipt-and-decision-replay-in-the-regional-reference-api)
 
 <!-- Image exported from the Mermaid diagram in docs/system-architecture.md. -->
 ![Proposed regional architecture connecting shared template publication with the regional updates API, summary service, engagement manager and SQS background worker.](docs/system-architecture.svg)
@@ -118,7 +118,7 @@ Use JDK 25 and run this command from the repository root. The mockup starts a lo
 
 The GitHub Actions workflow uploads `regional-version-selection-e2e` for each completed suite that produces test results. Download the artifact, extract it and open `evidence/index.html` to inspect the HTTP exchanges for each scenario.
 
-[Verified HTML report](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129446/artifacts/13906906514) · [GitHub Actions history](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/regional-version-selection.yml) · [Local report instructions](examples/regional-version-selection/README.md) · [Scenario screenshots](docs/evidence/issue-26/README.md)
+[Verified HTML report](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910591752) · [GitHub Actions history](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/regional-version-selection.yml) · [Local report instructions](examples/regional-version-selection/README.md) · [Scenario screenshots](docs/evidence/issue-26/README.md)
 
 ### Summary validation E2E tests
 
@@ -130,7 +130,7 @@ With JDK 25, run the reference summary API's HTTP tests from the repository root
 
 The suite uses approved template fixtures and a controlled grouping provider to check the net changes, fallback, editorial review and original view receipt. In GitHub Actions, download `summary-validation-e2e` and open `evidence/index.html` in the extracted archive to see the scenario results.
 
-[Verified HTML report](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129467/artifacts/13907106040) · [GitHub Actions history](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/summary-validation.yml) · [Local report instructions](examples/summary-validation/README.md) · [Owner-side acceptance criteria](docs/owner-acceptance.md#summary-service)
+[Verified HTML report](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910501976) · [GitHub Actions history](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/summary-validation.yml) · [Local report instructions](examples/summary-validation/README.md) · [Owner-side acceptance criteria](docs/owner-acceptance.md#summary-service)
 
 ### Connected reference API tests
 
@@ -140,7 +140,7 @@ Run the standalone reference suites and the connected HTTP flow with Java 25.
 ./mvnw -f examples/pom.xml -DfailIfNoTests=true clean test
 ```
 
-The connected test starts both Spring Boot applications on separate loopback ports. The test driver forwards the offered comparison pair to summary validation. The regional catalog, engagement manager, artifact source and grouping provider use controlled fixtures. [Local commands and report](examples/connected-reference-apis/README.md)
+The connected test starts both Spring Boot applications on separate loopback ports. The test driver forwards the offered comparison pair to summary validation. The regional catalog, engagement manager, artifact source and grouping provider use controlled fixtures. [Verified HTML report](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910556286) · [Local commands and report](examples/connected-reference-apis/README.md)
 
 ## GitHub Actions
 
