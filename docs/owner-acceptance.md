@@ -4,7 +4,7 @@ The regional updates API owns the offer shown to an auditor. The summary service
 
 ## Regional updates API
 
-Implementation follow-up [version-selection suite](https://github.com/luisfm44/caseware-template-fanout-worker/issues/26). Run the offer tests through the API with a controlled regional catalog, authenticated firm and file context, and an engagement manager fixture that controls the confirmed baseline and apply status.
+Implementation follow-up [version-selection suite](https://github.com/luisfm44/caseware-template-fanout-worker/issues/26). The [local reference API](../examples/regional-version-selection/README.md) runs the proposed policy over HTTP with controlled dependencies and records [scenario evidence](evidence/issue-26/README.md). The owning API and its CI run remain the acceptance evidence. Run the offer tests through the API with a controlled regional catalog, authenticated firm and file context, and an engagement manager fixture that controls the confirmed baseline and apply status.
 
 Use one product and market with two engagements, A and B, in the same firm. Both initially have confirmed baseline v4. Give each release an immutable revision identifier and explicitly configure the approved paths. Record the selected target and the requested summary pair in the response or downstream call trace.
 
