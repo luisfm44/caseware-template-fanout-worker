@@ -42,44 +42,44 @@ class Result:
 
 SCENARIOS = (
     Scenario("offersAnApprovedTargetAndTheExactCumulativeSummaryPair",
-             "ruta-aprobada", "Ruta aprobada",
-             "La versión confirmada sigue en v4. La API ofrece v7 y devuelve el par acumulativo v4 → v7."),
+             "approved-path", "Approved upgrade path",
+             "The confirmed version stays at v4. The API offers v7 with the cumulative summary pair v4 → v7."),
     Scenario("withholdsAnOfferWithoutOneApprovedTarget(String)[1]",
-             "ruta-ausente", "Ruta de actualización ausente",
-             "La base v4 se conserva. La API retiene la oferta y el par de resumen cuando falta una ruta aprobada."),
+             "missing-path", "Missing upgrade path",
+             "The baseline stays at v4. Without an approved path, the API withholds the offer and summary pair."),
     Scenario("withholdsAnOfferWithoutOneApprovedTarget(String)[2]",
-             "destino-ambiguo", "Destino ambiguo",
-             "Dos destinos activos dejan la oferta y el resumen sin determinar. La base v4 se conserva."),
+             "ambiguous-target", "Ambiguous target",
+             "With two active targets, the API withholds the offer and summary pair. The baseline stays at v4."),
     Scenario("exactDeclineIsScopedToTheFileAndConfirmedBaseline",
-             "rechazo-exacto", "Rechazo por archivo y versión base",
-             "El rechazo retiene v4 → v5 en el archivo A. El archivo B y la ruta v3 → v5 siguen disponibles."),
+             "exact-decline", "Decline scoped to the file and baseline",
+             "Declining v4 → v5 suppresses that offer for file A. File B and the v3 → v5 path remain eligible."),
     Scenario("anExactDeclineDoesNotSuppressALaterCompatibleTarget",
-             "oferta-posterior", "Oferta compatible posterior",
-             "Tras rechazar v5, el archivo todavía recibe la nueva oferta v7 con el par v4 → v7."),
+             "later-offer", "Later compatible offer",
+             "After declining v5, the file receives the new v7 offer with the summary pair v4 → v7."),
     Scenario("handlesWithdrawalWithoutRewritingTheConfirmedBaseline(String)[1]",
-             "retiro-sin-reemplazo", "Retiro sin reemplazo",
-             "Se retiene la oferta para v4. El archivo que ya tiene v7 conserva esa versión."),
+             "withdrawal-no-replacement", "Withdrawal without a replacement",
+             "The API withholds the offer for the v4 file. The file already on v7 stays at v7."),
     Scenario("handlesWithdrawalWithoutRewritingTheConfirmedBaseline(String)[2]",
-             "retiro-reemplazo-incompatible", "Retiro con reemplazo incompatible",
-             "El destino v8 queda retenido para v4. El archivo que ya tiene v7 conserva esa versión."),
+             "withdrawal-incompatible-replacement", "Withdrawal with an incompatible replacement",
+             "The API withholds the v8 offer for the v4 file. The file already on v7 stays at v7."),
     Scenario("handlesWithdrawalWithoutRewritingTheConfirmedBaseline(String)[3]",
-             "retiro-reemplazo-compatible", "Retiro con reemplazo compatible",
-             "La API ofrece v8 desde v4 por la ruta aprobada. El archivo que ya tiene v7 conserva esa versión."),
+             "withdrawal-compatible-replacement", "Withdrawal with a compatible replacement",
+             "The API offers v8 from v4 along the approved path. The file already on v7 stays at v7."),
     Scenario("holdsTheOfferAndSummaryWhenTheManagerHasNoConfirmedBaseline",
-             "base-sin-confirmar", "Versión base sin confirmar",
-             "La versión base, el destino y el par de resumen se devuelven como nulos."),
+             "unconfirmed-baseline", "Unconfirmed baseline",
+             "The API returns null for the baseline, target, and summary pair."),
     Scenario("baselineAdvancesOnlyAfterTheManagerConfirmsSuccess(ApplyStatus)[1]",
-             "aplicacion-fallida", "Aplicación pendiente y fallida",
-             "La API acepta la solicitud y devuelve PENDING. Tras FAILED, la versión confirmada sigue en v4."),
+             "application-failed", "Pending application that fails",
+             "The API accepts the request and returns PENDING. After FAILED, the confirmed version stays at v4."),
     Scenario("baselineAdvancesOnlyAfterTheManagerConfirmsSuccess(ApplyStatus)[2]",
-             "aplicacion-confirmada", "Aplicación pendiente y confirmada",
-             "La versión confirmada sigue en v4 durante PENDING y avanza a v7 después de APPLIED."),
+             "application-confirmed", "Pending application that succeeds",
+             "The confirmed version stays at v4 during PENDING and advances to v7 after APPLIED."),
     Scenario("rejectsAStaleTargetBeforeCallingTheManager",
-             "destino-obsoleto", "Decisión para un destino obsoleto",
-             "La API devuelve 409 al aplicar o rechazar v7 cuando la oferta vigente es v8."),
+             "stale-target", "Decision for a stale target",
+             "The API returns 409 for requests to apply or decline v7 while the current offer is v8."),
     Scenario("usesTheAuthenticatedFirmAndKeepsAnotherFirmsFileOutOfReach",
-             "aislamiento-entre-firmas", "Autenticación y aislamiento entre firmas",
-             "La API devuelve 401 sin autenticación, 404 para un archivo de otra firma y 200 para su firma dueña."),
+             "firm-isolation", "Authentication and firm isolation",
+             "The API returns 401 without authentication, 404 for another firm's file, and 200 for the firm that owns it."),
 )
 
 
@@ -128,16 +128,16 @@ footer { margin-top: 13px; font-size: 12px; color: #455870; }
 def parse_exchange(line):
     fields = line.split("\t")
     if len(fields) != 7:
-        raise ValueError("traza HTTP incompleta")
+        raise ValueError("incomplete HTTP trace")
     marker, method, path, firm, target, status, encoded_body = fields
     if marker != "CASEWARE_HTTP" or method not in {"GET", "POST"} or not path.startswith("/") or not firm:
-        raise ValueError("solicitud HTTP inválida")
+        raise ValueError("invalid HTTP request")
     if not re.fullmatch(r"[1-5][0-9]{2}", status):
-        raise ValueError("código HTTP inválido")
+        raise ValueError("invalid HTTP status code")
     try:
         response = base64.b64decode(encoded_body, validate=True).decode("utf-8")
     except (binascii.Error, UnicodeDecodeError) as error:
-        raise ValueError("cuerpo HTTP inválido") from error
+        raise ValueError("invalid HTTP response body") from error
     return Exchange(method, path, firm, target, status, response)
 
 
@@ -150,7 +150,7 @@ def parse_events(testcase):
             elif line.startswith("CASEWARE_FIXTURE"):
                 marker, separator, action = line.partition("\t")
                 if marker != "CASEWARE_FIXTURE" or not separator or not action.strip():
-                    raise ValueError("evento de datos de prueba inválido")
+                    raise ValueError("invalid test data event")
                 events.append(action.strip())
     return tuple(events)
 
@@ -162,13 +162,13 @@ def read_results(xml):
     for testcase in suite.findall("testcase"):
         name = testcase.get("name")
         if name not in expected:
-            raise ValueError(f"prueba no reconocida en Surefire: {name}")
+            raise ValueError(f"unrecognized test in Surefire: {name}")
         if name in results:
-            raise ValueError(f"prueba duplicada en Surefire: {name}")
+            raise ValueError(f"duplicate test in Surefire: {name}")
         try:
             duration = Decimal(testcase.get("time", ""))
             if not duration.is_finite() or duration < 0:
-                raise ValueError("duración inválida")
+                raise ValueError("invalid duration")
             if testcase.find("failure") is not None or testcase.find("error") is not None:
                 outcome = "fail"
             elif testcase.find("skipped") is not None:
@@ -177,17 +177,17 @@ def read_results(xml):
                 outcome = "pass"
             events = parse_events(testcase)
             if outcome == "pass" and not any(isinstance(event, Exchange) for event in events):
-                raise ValueError("faltan solicitudes HTTP de la prueba aprobada")
+                raise ValueError("missing HTTP requests for a passing test")
         except (InvalidOperation, ValueError) as error:
             raise ValueError(f"{name}: {error}") from error
         results[name] = Result(outcome, duration, events)
     if missing := expected - results.keys():
-        raise ValueError(f"faltan pruebas en Surefire: {', '.join(sorted(missing))}")
+        raise ValueError(f"missing tests in Surefire: {', '.join(sorted(missing))}")
     return results
 
 
 def badge(outcome):
-    labels = {"pass": "PASÓ", "fail": "FALLÓ", "skip": "OMITIDA"}
+    labels = {"pass": "PASSED", "fail": "FAILED", "skip": "SKIPPED"}
     return f'<span class="badge {outcome}">{labels[outcome]}</span>'
 
 
@@ -197,7 +197,7 @@ def filename(index, scenario):
 
 def layout(title, contents):
     return f"""<!doctype html>
-<html lang="es">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -205,7 +205,7 @@ def layout(title, contents):
 <style>{STYLES}</style>
 </head>
 <body><main>{contents}
-<footer>Fuente de evidencia · XML de Maven Surefire y traza del cliente HTTP del mockup local.</footer>
+<footer>Evidence source · Maven Surefire XML and HTTP client traces from the local mockup.</footer>
 </main></body>
 </html>
 """
@@ -220,8 +220,8 @@ def render_exchange(event):
             pass
         body = f"<code>{escape(response)}</code>"
     else:
-        body = '<span class="empty-body">Sin cuerpo</span>'
-    target = f'<span class="target">Destino <code>{escape(event.target)}</code></span>' if event.target else ""
+        body = '<span class="empty-body">No response body</span>'
+    target = f'<span class="target">Target <code>{escape(event.target)}</code></span>' if event.target else ""
     return f"""
 <li class="http">
     <div class="request"><span class="method">{escape(event.method)}</span><code>{escape(event.path)}</code>
@@ -232,21 +232,21 @@ def render_exchange(event):
 
 def render_case(index, scenario, result):
     http_count = sum(isinstance(event, Exchange) for event in result.events)
-    request_label = "solicitud" if http_count == 1 else "solicitudes"
+    request_label = "request" if http_count == 1 else "requests"
     steps = "\n".join(
         render_exchange(event) if isinstance(event, Exchange)
-        else f'<li class="fixture"><strong>Datos de prueba</strong> {escape(event)}</li>'
+        else f'<li class="fixture"><strong>Test data</strong> {escape(event)}</li>'
         for event in result.events
     )
-    timeline = f'<ol class="timeline">{steps}</ol>' if steps else '<p class="empty">Sin eventos registrados.</p>'
+    timeline = f'<ol class="timeline">{steps}</ol>' if steps else '<p class="empty">No recorded events.</p>'
     content = f"""
 <header>
-    <div class="kicker"><a href="index.html">Pruebas E2E</a><span>Escenario {index:02d} / {len(SCENARIOS)}</span></div>
+    <div class="kicker"><a href="index.html">End-to-end tests</a><span>Scenario {index:02d} / {len(SCENARIOS)}</span></div>
     <h1>{escape(scenario.title)}</h1>
     <div class="metrics">{badge(result.outcome)}
-      <span class="meta">{http_count} {request_label} HTTP · {result.duration:.3f} s</span></div>
+      <span class="meta">{http_count} HTTP {request_label} · {result.duration:.3f} s</span></div>
 </header>
-<p class="assertion"><strong>Resultado esperado</strong> {escape(scenario.expected)}</p>
+<p class="assertion"><strong>Expected result</strong> {escape(scenario.expected)}</p>
 {timeline}
 """
     return layout(scenario.title, content)
@@ -261,11 +261,11 @@ def render_index(results):
 <h2>{index:02d} · {escape(scenario.title)}</h2>
 <p>{escape(scenario.expected)}</p></a>""")
     counts = {status: sum(r.outcome == status for r in results.values()) for status in ("pass", "fail", "skip")}
-    return layout("Resultados del mockup regional", f"""
+    return layout("Regional mockup results", f"""
 <header>
     <div class="kicker">Caseware · Issue #26</div>
-    <h1>Resultados del mockup regional</h1>
-    <p class="meta">{len(results)} pruebas · {counts['pass']} aprobadas · {counts['fail']} fallidas · {counts['skip']} omitidas</p>
+    <h1>Regional mockup results</h1>
+    <p class="meta">{len(results)} tests · {counts['pass']} passed · {counts['fail']} failed · {counts['skip']} skipped</p>
 </header>
 <div class="grid">{''.join(links)}</div>
 """)
@@ -285,7 +285,7 @@ def main():
             )
         (args.output_dir / "index.html").write_text(render_index(results), encoding="utf-8")
     except (ET.ParseError, OSError, ValueError) as error:
-        parser.exit(1, f"No se pudo generar el reporte: {error}\n")
+        parser.exit(1, f"Could not generate the report: {error}\n")
 
 
 if __name__ == "__main__":

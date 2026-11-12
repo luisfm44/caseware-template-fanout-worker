@@ -79,7 +79,7 @@ class RegionalVersionSelectionHttpTest {
         manager.put(FIRM_A, FILE_A, V4);
         manager.put(FIRM_A, FILE_B, V4);
         manager.put(FIRM_B, OTHER_FIRM_FILE, V4);
-        fixture("Base inicial %s para %s/%s, %s/%s y %s/%s".formatted(
+        fixture("Initial baseline %s for %s/%s, %s/%s, and %s/%s".formatted(
                 V4, FIRM_A, FILE_A, FIRM_A, FILE_B, FIRM_B, OTHER_FIRM_FILE));
     }
 
@@ -160,7 +160,7 @@ class RegionalVersionSelectionHttpTest {
         assertThat(getOffer(FIRM_A, FILE_A).read("$.confirmedBaseline", String.class)).isEqualTo(V4);
 
         manager.complete(decisionId, outcome);
-        fixture("El engagement manager de prueba confirma %s para %s".formatted(outcome, decisionId));
+        fixture("The test engagement manager confirms %s for %s".formatted(outcome, decisionId));
         assertThat(json(get(FIRM_A, applicationPath), 200).read("$.status", String.class)).isEqualTo(outcome.name());
         var updated = getOffer(FIRM_A, FILE_A);
         if (outcome == ApplyStatus.APPLIED) {
@@ -199,14 +199,14 @@ class RegionalVersionSelectionHttpTest {
         catalog.snapshot = snapshot;
         var paths = snapshot.approvedPaths().stream()
                 .map(path -> path.baseline() + " → " + path.target()).sorted().toList();
-        fixture("Catálogo %s · destinos %s · rutas aprobadas %s · retiradas %s · reemplazos %s".formatted(
+        fixture("Catalog %s · targets %s · approved paths %s · withdrawn releases %s · replacements %s".formatted(
                 snapshot.revision(), snapshot.designatedTargets(), paths, snapshot.withdrawn(), snapshot.replacements()));
     }
 
     private void setBaseline(String firm, String engagement, String baseline) {
         manager.put(firm, engagement, baseline);
-        fixture("El engagement manager de prueba deja %s/%s %s".formatted(firm, engagement,
-                baseline == null ? "sin base confirmada" : "con base confirmada " + baseline));
+        fixture("The test engagement manager sets %s/%s %s".formatted(firm, engagement,
+                baseline == null ? "to no confirmed baseline" : "to confirmed baseline " + baseline));
     }
 
     private static void fixture(String action) {

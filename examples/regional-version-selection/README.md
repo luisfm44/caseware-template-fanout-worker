@@ -1,20 +1,20 @@
-# Mockup regional de selección de versiones
+# Regional version selection mockup
 
-Este ejemplo ejecuta el [issue #26](https://github.com/luisfm44/caseware-template-fanout-worker/issues/26) en una API de referencia. Spring Boot inicia un servidor HTTP en `127.0.0.1` con un puerto dinámico. Los tests autentican dos firmas sintéticas, envían solicitudes HTTP reales y comparan las respuestas con los resultados esperados. El catálogo regional y el engagement manager son adaptadores de prueba. La API calcula la oferta y el par de versiones para el resumen.
+This example exercises the proposed policy from [issue #26](https://github.com/luisfm44/caseware-template-fanout-worker/issues/26) through a reference API. Spring Boot starts an HTTP server on a dynamic port at `127.0.0.1`. The tests authenticate two synthetic firms, send real HTTP requests and assert the responses. Test adapters control the regional catalog and engagement manager. The API calculates the offer and the baseline and target versions for the summary.
 
-## Ejecutar
+## Run the tests locally
 
-Con JDK 25, desde la raíz del repositorio:
+Use JDK 25 and run the command from the repository root.
 
 ```sh
 ./mvnw -f examples/regional-version-selection/pom.xml test
 ```
 
-En Windows, usa `mvnw.cmd` con los mismos argumentos. Maven descarga las dependencias en la primera ejecución. El servidor se inicia y se detiene con la suite.
+On Windows, use `mvnw.cmd` with the same arguments. Maven downloads dependencies on the first run. The suite starts and stops the server.
 
-## Ver el resultado de cada escenario
+## View each scenario
 
-Con Python 3, desde la raíz del repositorio:
+Use Python 3 to generate the report from the Surefire results.
 
 ```sh
 python3 examples/regional-version-selection/tools/render_evidence.py \
@@ -22,18 +22,18 @@ python3 examples/regional-version-selection/tools/render_evidence.py \
   examples/regional-version-selection/target/evidence
 ```
 
-Abre `examples/regional-version-selection/target/evidence/index.html`. El informe muestra el estado del test, los cambios que hizo el fixture y las solicitudes y respuestas HTTP observadas. Si Maven reporta fallos, ejecuta el comando del informe después de que termine la suite para verlos. Las credenciales sintéticas se excluyen de la traza.
+Open `examples/regional-version-selection/target/evidence/index.html`. The report shows each test result, changes to the fixtures and the observed HTTP requests and responses. Run the reporting command after the suite finishes to inspect failures as well. The trace excludes synthetic credentials.
 
-Las [capturas por escenario](../../docs/evidence/issue-26/README.md) corresponden a una ejecución verificada.
+GitHub Actions runs the same suite and publishes the HTML report and Surefire XML as `regional-version-selection-e2e`. Download the artifact and open `evidence/index.html`. The [root README](../../README.md#regional-version-selection-e2e-tests) links the verified run, and the [scenario screenshots](../../docs/evidence/issue-26/README.md) are checked into the branch.
 
-## Qué puede devolver la API
+## HTTP outcomes covered by the suite
 
-| Solicitud | Resultados que comprueba la suite |
+| Request | Tested outcomes |
 | --- | --- |
-| `GET /engagements/{id}/offer` | `200` con destino elegible y par de resumen, o con ambos campos en `null` cuando la oferta queda retenida. |
-| `POST /engagements/{id}/decline` | `204` al registrar el rechazo exacto. `409` si el destino dejó de estar ofrecido. |
-| `POST /engagements/{id}/apply` | `202` con una solicitud pendiente. `409` si el destino dejó de estar ofrecido. |
-| `GET /engagements/{id}/applications/{decisionId}` | `200` con `PENDING`, `FAILED` o `APPLIED`. Solo la confirmación del manager cambia la versión efectiva. |
-| Acceso a la oferta y aplicación | `401` sin autenticación para la consulta de oferta. `404` al intentar consultar o aplicar en un archivo de otra firma. |
+| `GET /engagements/{id}/offer` | `200` with an eligible target and summary pair, or `200` with both fields set to `null` when the offer is withheld. |
+| `POST /engagements/{id}/decline` | `204` after recording the exact decline. `409` if the target is no longer offered. |
+| `POST /engagements/{id}/apply` | `202` with a pending application. `409` if the target is no longer offered. |
+| `GET /engagements/{id}/applications/{decisionId}` | `200` with `PENDING`, `FAILED` or `APPLIED`. The confirmed baseline advances after the manager confirms success. |
+| Offer and application access | `401` for an unauthenticated offer request. `404` for reading or applying to a file owned by another firm. |
 
-La suite verifica el comportamiento de la API de referencia con datos sintéticos. Para cerrar el #26 queda pendiente ejecutar la suite de aceptación contra la API regional dueña y vincular su resultado de CI.
+The suite uses synthetic data and controlled dependencies. Closing #26 requires running acceptance tests against the owning regional API and linking its CI evidence.
