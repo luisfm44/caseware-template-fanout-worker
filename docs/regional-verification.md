@@ -1,10 +1,10 @@
 # Regional readiness and verification
 
-The regional proposal uses an SQS Standard test queue, the deployed engagement manager and the regional engagement source for readiness verification. The integration run with those dependencies remains pending. [Regional design](system-architecture.md)
+A future regional deployment can use an SQS Standard test queue, the deployed engagement manager and the regional engagement source to verify readiness. The integration scenarios below specify evidence to collect in that environment. [Regional design](system-architecture.md)
 
 The worker's PostgreSQL integration tests use separate JVMs and a controlled HTTP manager to check recovery after a process dies, a single effect per operation, the shared capacity limit, and the small firm's next slot under contention. The planning suite resumes in another JVM against a pinned fixture snapshot and checks the expired-snapshot outcome. The `demo` profile exercises two logical workers inside one JVM. [Two-JVM worker tests](../src/test/java/io/github/luisfm44/caseware/worker/bootstrap/DurableWorkerProcessIT.java) · [Planning snapshot tests](../src/test/java/io/github/luisfm44/caseware/worker/planning/PublicationSnapshotIT.java) · [Worker CI and demo evidence](evidence/README.md)
 
-The version-selection and summary-validation HTTP examples exercise reference behavior with synthetic dependencies. Their service owners still need to link CI evidence against the regional updates API and the summary service implementations. [HTTP reports](evidence/README.md) · [Owner acceptance criteria](owner-acceptance.md)
+The version-selection and summary-validation references run independently and together over loopback HTTP. A test driver forwards the exact offered pair and checks the original receipt. These local runs use synthetic dependencies. The regional criteria cover live service contracts, durable recovery and delivery through AWS. [Connected HTTP flow](../examples/connected-reference-apis/README.md) · [Reference and regional acceptance](owner-acceptance.md)
 
 ## Regional integration run
 

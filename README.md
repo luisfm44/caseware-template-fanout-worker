@@ -15,7 +15,7 @@ This Caseware Staff Java take-home demonstrates how to plan a template publicati
 
 **Snapshot recovery** also has a cross-process test. A fresh planner JVM resumes from the stored snapshot ID and cursor after the source changes. An expired or mismatched snapshot halts planning. The worker baseline has **48 unit and 29 PostgreSQL integration tests**, with **100% JaCoCo line and branch coverage** and a passing **SonarQube Quality Gate**. [Worker tests](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129499/artifacts/13905974454) · [Quality reports](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129499/artifacts/13906113674)
 
-**Regional acceptance remains open.** The owners of the regional updates API and summary service need to run equivalent suites in their own CI. The proposed SQS deployment and integration with the owning engagement manager need regional verification. [Owner acceptance](docs/owner-acceptance.md) · [Regional rollout verification](docs/regional-verification.md)
+**Connected reference evidence.** A local test driver forwards the exact regional offer pair to summary validation over HTTP. It checks a pinned French Canadian receipt, zero summary calls for a withheld offer and rejection of changed artifact bytes. A future AWS deployment would need separate verification with its actual service and queue dependencies. [Connected test guide](examples/connected-reference-apis/README.md) · [Regional rollout criteria](docs/regional-verification.md)
 
 ## Developer documentation
 
@@ -131,6 +131,16 @@ With JDK 25, run the reference summary API's HTTP tests from the repository root
 The suite uses approved template fixtures and a controlled grouping provider to check the net changes, fallback, editorial review and original view receipt. In GitHub Actions, download `summary-validation-e2e` and open `evidence/index.html` in the extracted archive to see the scenario results.
 
 [Verified HTML report](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129467/artifacts/13907106040) · [GitHub Actions history](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/summary-validation.yml) · [Local report instructions](examples/summary-validation/README.md) · [Owner-side acceptance criteria](docs/owner-acceptance.md#summary-service)
+
+### Connected reference API tests
+
+Run the standalone reference suites and the connected HTTP flow with Java 25.
+
+```bash
+./mvnw -f examples/pom.xml -DfailIfNoTests=true clean test
+```
+
+The connected test starts both Spring Boot applications on separate loopback ports. The test driver forwards the offered comparison pair to summary validation. The regional catalog, engagement manager, artifact source and grouping provider use controlled fixtures. [Local commands and report](examples/connected-reference-apis/README.md)
 
 ## GitHub Actions
 
