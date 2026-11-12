@@ -4,7 +4,7 @@ This Caseware Staff Java take-home demonstrates how to plan a template publicati
 
 ## Caseware feedback and verified results
 
-**118 tests passed on `main` at `362ef1c`.** The worker passed the SonarQube Quality Gate with 100% overall coverage and 100% JaCoCo line and branch coverage. [CI run](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632) · [Test evidence guide](docs/evidence/README.md) · [Quality reports](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910676292)
+**Recorded baseline.** At `362ef1c` on `main`, 118 tests passed. The worker passed the SonarQube Quality Gate with 100% overall coverage and 100% JaCoCo line and branch coverage. [CI run](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632) · [Test evidence guide](docs/evidence/README.md) · [Quality reports](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910676292)
 
 | Feedback | What the tests demonstrate | Report |
 | --- | --- | --- |
@@ -16,6 +16,8 @@ This Caseware Staff Java take-home demonstrates how to plan a template publicati
 **Worker recovery.** The **48 unit tests and 31 PostgreSQL integration tests** include a fresh planner resuming from its pinned snapshot and two late-confirmation races. An expired lease can still settle while its claim token and attempt match. Once another JVM replaces the token, it reconciles the same attempt and releases the reservation on settlement. [Worker tests](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910411563) · [Process-test assertions](docs/worker-architecture.md#verification)
 
 **Connected reference evidence.** A local test driver forwards the exact regional offer pair to summary validation over HTTP. It checks the original French Canadian summary view receipt after a later revision, zero summary calls for a withheld offer and rejection of changed artifact bytes. The regional deployment has separate criteria for its service contracts, durable archive and queue. [Connected test guide](examples/connected-reference-apis/README.md) · [Regional rollout criteria](docs/regional-verification.md)
+
+**Follow-up regressions.** The process suite also covers a slow confirmed lookup and a PostgreSQL disconnect after the downstream effect. The summary suite checks that a replacement mock returns `404` for the prior instance's identifiers. [Latest main CI runs](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/ci.yml?query=branch%3Amain+event%3Apush) · [Regression scenarios](docs/evidence/README.md#reproduce-the-postgresql-tests)
 
 ## Developer documentation
 
@@ -100,13 +102,53 @@ With PostgreSQL running, execute the cross-process regression.
 
 The worker process suite seeds planned jobs, starts two independent JVMs against one HTTP test downstream, kills the first JVM and checks durable recovery, one effect per operation and a measured peak of one. Separate scenarios verify late confirmation before and after claim takeover, late-request fencing, stale revision rejection and cross-firm scheduling. The snapshot suite starts a fresh planner JVM against the persisted checkpoint after the controlled HTTP source changes. [Test setup and assertions](docs/evidence/README.md#reproduce-the-postgresql-tests)
 
-To run a worker against a compatible downstream, first initialize the schema and insert jobs using the planner. Set `FANOUT_DB_URL`, `FANOUT_DB_USER`, `FANOUT_DB_PASSWORD` and `FANOUT_DOWNSTREAM_URL`.
+#### Run two durable workers locally
+
+From the repository root with JDK 25, start PostgreSQL, build the JAR and give this run a fresh schema. The local [demo fixture](scripts/fixtures/DistributedWorkerDemo.java) uses the real planner to seed six jobs per firm and starts a loopback HTTP mock.
 
 ```sh
-java -jar target/template-fanout-worker.jar --spring.profiles.active=postgres-worker --worker.capacity=3
+export FANOUT_DB_PASSWORD='your-local-password'
+export FANOUT_DB_USER=fanout
+demo_schema="fanout_demo_$(date +%s)"
+export FANOUT_DB_URL="jdbc:postgresql://127.0.0.1:55432/fanout?currentSchema=$demo_schema"
+export FANOUT_DOWNSTREAM_URL='http://127.0.0.1:8089'
+
+docker compose up -d --wait
+./mvnw -DskipTests package org.apache.maven.plugins:maven-dependency-plugin:3.7.0:build-classpath \
+  -Dmdep.outputFile=target/demo-classpath
+java --class-path "target/classes:$(cat target/demo-classpath)" \
+  scripts/fixtures/DistributedWorkerDemo.java 8089 > target/durable-demo-mock.log 2>&1 &
+mock_pid=$!
 ```
 
-All replicas for a pool use the same PostgreSQL schema, configured capacity and downstream. The [worker design](docs/worker-design.md#durable-consumption-and-shared-capacity) specifies the HTTP contract and the regional integration responsibilities.
+When `target/durable-demo-mock.log` reports `Ready: 12 planned jobs`, start the two consumers from the same shell.
+
+```sh
+java -jar target/template-fanout-worker.jar --spring.profiles.active=postgres-worker \
+  --worker.capacity=2 > target/durable-demo-worker-a.log 2>&1 &
+worker_a=$!
+java -jar target/template-fanout-worker.jar --spring.profiles.active=postgres-worker \
+  --worker.capacity=2 > target/durable-demo-worker-b.log 2>&1 &
+worker_b=$!
+printf 'Worker A PID %s, worker B PID %s\n' "$worker_a" "$worker_b"
+```
+
+Check the mock report and the durable job states. Repeat the checks until the run completes.
+
+```sh
+curl --fail --silent --show-error "$FANOUT_DOWNSTREAM_URL/report"
+docker compose exec -T postgres psql -U fanout -d fanout -c \
+  "SELECT execution_state, count(*) FROM $demo_schema.fanout_job GROUP BY execution_state;"
+```
+
+Expect 12 submissions, 12 distinct effects, a measured peak at or below the configured limit of two, and 12 `APPLIED` rows. The peak is two when both JVMs overlap. The mock keeps its effect ledger in memory for the lifetime of the run. The [automated process tests](docs/evidence/README.md#reproduce-the-postgresql-tests) exercise failure and recovery with controlled timing.
+
+```sh
+kill "$worker_a" "$worker_b" "$mock_pid"
+docker compose down
+```
+
+Each run uses a new schema. Compose retains its named volume and the demo rows for inspection. For another compatible downstream, seed jobs through the planner and point both replicas at the same schema, capacity and downstream origin. See the [HTTP contract and lease rules](docs/worker-design.md#durable-consumption-and-shared-capacity).
 
 ### Regional version selection E2E tests
 
