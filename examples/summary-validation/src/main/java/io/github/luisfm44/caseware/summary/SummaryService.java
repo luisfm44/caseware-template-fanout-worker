@@ -7,6 +7,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 import io.github.luisfm44.caseware.summary.SummaryPolicy.Sentence;
 import io.github.luisfm44.caseware.summary.TemplateCatalog.Artifact;
@@ -105,7 +106,7 @@ final class SummaryService {
     }
 
     private ArchivedSummary archive(Comparison comparison, List<Sentence> sentences) {
-        var version = "summary-" + (archive.size() + 1);
+        var version = "summary-" + UUID.randomUUID();
         var artifact = new ArchivedSummary(version, comparison.baselineHash(), comparison.targetHash(),
                 comparison.locale(), List.copyOf(sentences));
         archive.put(version, artifact);
@@ -117,7 +118,7 @@ final class SummaryService {
         if (artifact == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND);
         }
-        var receipt = new View("receipt-" + (views.size() + 1), artifact);
+        var receipt = new View("receipt-" + UUID.randomUUID(), artifact);
         views.put(receipt.receiptId(), receipt);
         return receipt;
     }
