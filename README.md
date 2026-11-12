@@ -144,11 +144,11 @@ The connected test starts both Spring Boot applications on separate loopback por
 
 ## GitHub Actions
 
-- **Verify and scan** runs on pull requests, pushes to main, or manual dispatch. The `verify` job runs the unit and PostgreSQL integration tests, packages the executable JAR, and uploads both sets of test reports. The `security` job scans dependencies and tracked sources with Trivy. High or critical findings fail the scan.
-- **SonarQube quality** runs on pushes to `main` and on manual dispatch within **Verify and scan**. It combines unit and PostgreSQL test coverage, requires full JaCoCo line and branch coverage and enforces a 100% overall SonarQube Quality Gate. [Run and inspect code quality checks](docs/code-quality.md)
+- **Verify and scan** runs on pull requests targeting `main`, pushes to `main` and manual dispatch. The required `verify` check passes only when the worker tests, quality gates, both standalone HTTP suites and the connected reference suite succeed. Each suite publishes its report. The required `security` check scans dependencies and tracked sources with Trivy. High or critical findings fail the scan.
+- **Worker quality** packages the JAR, enforces 100% JaCoCo line and branch coverage and runs SonarQube. Pull requests use a disposable SonarQube project on the runner. [Run and inspect code quality checks](docs/code-quality.md)
 - **Run local deployment demo** is a manual smoke workflow on an isolated runner. It starts a PostgreSQL service, builds the JAR and launches the demo profile. The workflow checks the report for successful completion, single effects, shared capacity, resumed planning and reconciliation, then uploads the JSON report as an artifact. [Demo workflow](.github/workflows/demo.yml)
 
-Worker Java changes must keep **100% line and branch coverage in JaCoCo** and pass the **100% overall SonarQube Quality Gate**. Worker PRs run `verify` and `security` automatically. Run **Verify and scan** manually on the PR branch to record the SonarQube result for worker Java changes. Each reference API has its own path-triggered HTTP workflow and report. [Pipeline event matrix and troubleshooting](docs/pipelines.md)
+Open **Verify and scan** in the pull request checks for the worker reports, SonarQube results and all three HTTP scenario archives. Each reference workflow also supports manual dispatch to reproduce its report independently. [Pipeline event matrix and troubleshooting](docs/pipelines.md)
 
 ## Issues, branches and pull requests
 

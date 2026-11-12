@@ -68,7 +68,7 @@ The PostgreSQL worker tests use a controlled downstream and engagement source. R
 
 ## Code quality · Issue [#8][issue-8]
 
-JaCoCo combines coverage from the unit and PostgreSQL integration suites. SonarQube Community Build enforces the overall coverage floor on `main` and supports isolated manual verification. The default runner-local instance publishes the gate, metrics and findings as artifacts. An existing SonarQube instance can provide historical analysis through a configured project token. [Quality workflow and reproduction](code-quality.md)
+JaCoCo combines coverage from the unit and PostgreSQL integration suites. SonarQube Community Build enforces the overall coverage floor as part of the required PR check and on pushes to `main`. Manual verification is also available. The default runner-local instance publishes the gate, metrics and findings as artifacts. An existing SonarQube instance can provide historical analysis through a configured project token. [Quality workflow and reproduction](code-quality.md)
 
 [Issue #12][issue-12] sets the floor at 100% and checks line and branch coverage independently in Maven. Tests exercise worker validation, retry and reconciliation paths, real PostgreSQL transactions and the demo. The isolated negative probe uses unit-only execution data to verify that SonarQube rejects a drop in coverage.
 

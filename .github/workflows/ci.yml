@@ -19,56 +19,6 @@ permissions:
   contents: read
 
 jobs:
-  verify:
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    services:
-      postgres:
-        image: postgres:18.6
-        env:
-          POSTGRES_DB: fanout
-          POSTGRES_USER: fanout
-          POSTGRES_PASSWORD: fanout-ci
-        ports:
-          - 5432/tcp
-        options: >-
-          --health-cmd "pg_isready -h localhost -U fanout -d fanout"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 12
-    steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          persist-credentials: false
-      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        with:
-          distribution: temurin
-          java-version: '25'
-          cache: maven
-      - name: Validate Maven project
-        run: ./mvnw --batch-mode --no-transfer-progress validate
-      - name: Report scaffold status
-        if: hashFiles('src/main/java/**/*.java', 'src/test/java/**/*.java') == ''
-        run: echo 'Scaffold only. No Java sources, tests, or executable JAR yet.' >> "$GITHUB_STEP_SUMMARY"
-      - name: Run tests and build executable JAR
-        if: hashFiles('src/main/java/**/*.java', 'src/test/java/**/*.java') != ''
-        env:
-          FANOUT_DB_URL: jdbc:postgresql://127.0.0.1:${{ job.services.postgres.ports[5432] }}/fanout
-          FANOUT_DB_USER: fanout
-          FANOUT_DB_PASSWORD: fanout-ci
-        run: ./mvnw --batch-mode --no-transfer-progress -Ppostgres-integration -DfailIfNoTests=true verify
-      - name: Upload JAR and test reports
-        if: success() && hashFiles('src/main/java/**/*.java') != ''
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: worker-and-test-results
-          path: |
-            target/template-fanout-worker.jar
-            target/surefire-reports/TEST-*.xml
-            target/failsafe-reports/TEST-*.xml
-          if-no-files-found: error
-          retention-days: 7
-
   security:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -87,7 +37,6 @@ jobs:
           exit-code: '1'
 
   quality:
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     concurrency:
       group: sonarqube-${{ github.ref == 'refs/heads/main' && 'main' || github.run_id }}
       cancel-in-progress: false
@@ -119,7 +68,7 @@ jobs:
           cache: maven
       - name: Build and collect JaCoCo coverage
         env:
-          FANOUT_DB_URL: jdbc:postgresql://127.0.0.1:${{ job.services.postgres.ports[5432] }}/fanout
+          FANOUT_DB_URL: jdbc:postgresql://127.0.0.1:${{ job.services.postgres.ports['5432'] }}/fanout
           FANOUT_DB_USER: fanout
           FANOUT_DB_PASSWORD: fanout-ci
           PROVE_GATE_FAILURE: ${{ inputs.prove_gate_failure || false }}
@@ -129,11 +78,22 @@ jobs:
           else
             ./mvnw --batch-mode --no-transfer-progress -Ppostgres-integration,coverage -DfailIfNoTests=true clean verify
           fi
+      - name: Upload JAR and test reports
+        if: ${{ !inputs.prove_gate_failure }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: worker-and-test-results
+          path: |
+            target/template-fanout-worker.jar
+            target/surefire-reports/TEST-*.xml
+            target/failsafe-reports/TEST-*.xml
+          if-no-files-found: error
+          retention-days: 7
       - name: Analyze Java and enforce the SonarQube Quality Gate
         env:
-          SONAR_HOST_URL: ${{ github.ref == 'refs/heads/main' && vars.SONAR_HOST_URL || '' }}
-          SONAR_PROJECT_KEY: ${{ github.ref == 'refs/heads/main' && vars.SONAR_PROJECT_KEY || '' }}
-          SONAR_TOKEN: ${{ github.ref == 'refs/heads/main' && secrets.SONAR_TOKEN || '' }}
+          SONAR_HOST_URL: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.SONAR_HOST_URL || '' }}
+          SONAR_PROJECT_KEY: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.SONAR_PROJECT_KEY || '' }}
+          SONAR_TOKEN: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && secrets.SONAR_TOKEN || '' }}
           PROVE_GATE_FAILURE: ${{ inputs.prove_gate_failure || false }}
         run: |
           if [[ "$PROVE_GATE_FAILURE" == true ]]; then
@@ -157,3 +117,34 @@ jobs:
             target/sonar-quality/
           if-no-files-found: ignore
           retention-days: 14
+
+  regional-reference:
+    uses: ./.github/workflows/regional-version-selection.yml
+
+  summary-reference:
+    uses: ./.github/workflows/summary-validation.yml
+
+  connected-reference:
+    uses: ./.github/workflows/connected-reference-apis.yml
+
+  verify:
+    name: verify
+    needs: [quality, regional-reference, summary-reference, connected-reference]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    permissions: {}
+    timeout-minutes: 2
+    steps:
+      - name: Require successful worker quality and reference API tests
+        env:
+          WORKER_QUALITY: ${{ needs.quality.result }}
+          REGIONAL_REFERENCE: ${{ needs.regional-reference.result }}
+          SUMMARY_REFERENCE: ${{ needs.summary-reference.result }}
+          CONNECTED_REFERENCE: ${{ needs.connected-reference.result }}
+        run: |
+          printf 'Worker quality: %s\nRegional reference: %s\nSummary reference: %s\nConnected reference: %s\n' \
+            "$WORKER_QUALITY" "$REGIONAL_REFERENCE" "$SUMMARY_REFERENCE" "$CONNECTED_REFERENCE"
+          if [[ "$WORKER_QUALITY" != success || "$REGIONAL_REFERENCE" != success ||
+                "$SUMMARY_REFERENCE" != success || "$CONNECTED_REFERENCE" != success ]]; then
+            exit 1
+          fi

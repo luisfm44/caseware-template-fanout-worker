@@ -224,7 +224,7 @@ sequenceDiagram
 - [`PublicationSnapshotIT`][snapshot-test] checks that a fresh JVM resumes the same source snapshot after the live source changes. It also checks that an unavailable or mismatched snapshot leaves the checkpoint and committed jobs intact.
 - [`RetryingDownstreamClientTest`][retry-test] checks the single-effect recovery, bounded retries and rejection paths with controlled responses.
 - The [manual demo workflow](../.github/workflows/demo.yml) builds and runs the packaged JAR against PostgreSQL, checks the report and uploads it as a workflow artifact.
-- The [SonarQube quality job](code-quality.md) verifies zero missed JaCoCo lines and branches, imports the combined unit and PostgreSQL coverage, and enforces the 100% overall gate. GitHub Actions publishes both reports on pushes to `main` and on manual runs.
+- The [SonarQube quality job](code-quality.md) verifies zero missed JaCoCo lines and branches, imports the combined unit and PostgreSQL coverage, and enforces the 100% overall gate. GitHub Actions publishes both reports on PRs to `main`, on pushes to `main` and on manual runs.
 
 [Verified CI runs and reports](evidence/README.md) · [Worker design decisions](worker-design.md)
 
