@@ -2,7 +2,7 @@
 
 The proposed deployment publishes template releases per product and market. The regional updates API derives each auditor's offer from verified metadata in the firm's home region. The Java fan-out worker covers background verification for unknown or flagged baselines. Template publication, summary generation, offer decisions and authoritative engagement changes belong to their respective services. [Regional deployment design](https://github.com/luisfm44/caseware-template-fanout-worker/issues/20)
 
-The diagram shows the proposed service boundaries. This repository implements the Java worker and two local reference APIs. The worker's PostgreSQL and HTTP integration and the connected offer-to-summary flow have executable test evidence. [Java worker architecture](worker-architecture.md) · [Test evidence index](evidence/README.md)
+The diagrams show the proposed service boundaries. This repository implements the Java worker and two local reference APIs. The worker's PostgreSQL and HTTP integration and the connected offer-to-summary flow have executable test evidence. [Java worker architecture](worker-architecture.md) · [Test evidence index](evidence/README.md)
 
 ```mermaid
 ---
@@ -10,59 +10,52 @@ config:
   theme: neutral
   htmlLabels: false
   flowchart:
-    rankSpacing: 26
-    nodeSpacing: 20
-    wrappingWidth: 205
+    rankSpacing: 29
+    nodeSpacing: 23
+    wrappingWidth: 186
     subGraphTitleMargin:
       top: 4
       bottom: 20
 ---
 flowchart TB
-    accTitle: Proposed regional system architecture
-    accDescr: The template service supplies approved artifact bytes and hashes to the summary service, which verifies and compares them before archiving localized summaries. The firm's updates API selects offers from regional release and engagement data. An offer receipt identifies the offer used for an apply or decline decision. A summary view receipt identifies the archived summary version shown. A planner publishes verification jobs to regional SQS. The Java worker reconciles them through the engagement manager, which owns downstream admission and effects.
+    accTitle: Proposed regional offer and summary flow
+    accDescr: The regional updates API serves verified offers. When a summary is missing it enqueues the exact comparison, and the summary service replicates the verified artifact. The engagement manager orders decision admission with withdrawal through the template authority. Unknown or flagged baselines can enter the separate background verification flow.
 
     subgraph SHARED["Shared template services"]
-        direction LR
-        RELEASE["Template service<br/>Release and outbox"]
+        RELEASE["Template service and authority<br/>Release, outbox and decision grants"]
         SUMMARY["Summary service<br/>Verify hashes and compare versions"]
-        ARCHIVE[("Versioned summary archive<br/>Verified facts and localized text")]
-        RELEASE -->|"Approved artifact bytes and hashes"| SUMMARY
+        ARCHIVE[("Versioned summary archive")]
+        RELEASE -->|"Approved artifacts"| SUMMARY
         SUMMARY -->|"Promote validated summary"| ARCHIVE
     end
 
     subgraph REGION["Firm home region"]
-        direction TB
         CATALOG["Regional catalog"]
         EVIDENCE[("Regional evidence store")]
         API["Regional updates API<br/>Select offer and summary pair"]
         AUDITOR["Auditor"]
-        PLANNER["Exception planner"]
-        QUEUE["Regional SQS"]
-        WORKER["Java fan-out worker"]
+        SUMMARY_JOBS["Summary generation queue"]
+        FIRM[("Firm database<br/>Index, decisions and receipts")]
         MANAGER["Engagement manager<br/>Shared admission and effects"]
-        FIRM[("Firm database<br/>Index, decisions and summary view receipts")]
 
-        CATALOG --> API
-        EVIDENCE -->|"Archived summary and locale"| API
+        CATALOG -->|"Read active release"| API
+        EVIDENCE -->|"Read archived summary"| API
         AUDITOR -->|"Inspect offer or submit decision"| API
-        API -->|"Read index and record summary views"| FIRM
-        CATALOG --> PLANNER
-        PLANNER -->|"Queue flagged work"| QUEUE
-        QUEUE -->|"Deliver verification job"| WORKER
-        WORKER -->|"Submit or query status"| MANAGER
+        API -->|"Record the viewed artifact"| FIRM
+        API -->|"On miss, enqueue exact comparison"| SUMMARY_JOBS
         API -->|"Apply or decline with offer receipt"| MANAGER
-        MANAGER -->|"Commit verified metadata"| FIRM
+        MANAGER -->|"Commit verified metadata or decision"| FIRM
     end
 
     RELEASE -->|"Relay release revision"| CATALOG
+    MANAGER -->|"Order decision admission with withdrawal"| RELEASE
+    SUMMARY_JOBS -->|"Generate exact pair, locale and policy"| SUMMARY
     ARCHIVE -->|"Replicate promoted versions"| EVIDENCE
 
     classDef shared fill:#f6f8fa,stroke:#8c959f,color:#24292f
     classDef regional fill:#e6ffec,stroke:#2da44e,color:#24292f
-    classDef background fill:#ddf4ff,stroke:#218bff,color:#24292f
     class RELEASE,SUMMARY,ARCHIVE shared
-    class CATALOG,EVIDENCE,API,AUDITOR,MANAGER,FIRM regional
-    class PLANNER,QUEUE,WORKER background
+    class CATALOG,EVIDENCE,API,AUDITOR,SUMMARY_JOBS,MANAGER,FIRM regional
 ```
 
 ## Service ownership in the proposed deployment
@@ -70,9 +63,9 @@ flowchart TB
 | Area | Proposed responsibility |
 | --- | --- |
 | Template service and regional catalog | Commit the release and outbox revision in one transaction. Regional consumers ignore older revisions and fetch a catalog snapshot on gaps. |
-| Regional updates API | Derive firm and file access from the authenticated session. Use the active release, the verified effective version and prior decisions to select the offer and exact summary pair. Return an offer receipt for the apply or decline decision. Record the archived summary version and locale shown to the auditor in a separate view receipt. |
+| Regional updates API | Derive firm and file access from the authenticated session. Use the active release, the verified effective version and prior decisions to select the offer and exact summary pair. Return an offer receipt for the apply or decline decision. Read the archived version for the exact comparison. On a miss, show **Preparing summary** and enqueue one request per product, track, baseline hash, target hash, locale and policy version. Record the archived summary version and locale shown to the auditor in a separate view receipt. |
 | Summary service and regional evidence | Use approved template artifacts to verify the comparison, render a localized summary and archive each promoted version with its source hashes. Replicate promoted versions to regional evidence stores so the regional API can retrieve the version cited by a receipt. |
-| Engagement manager | Own file creation, opening and decisions. Validate the original offer before admitting a new decision and replay an accepted decision idempotently. The template authority orders decision admission against withdrawal. Enforce admission for the actual downstream pool, validate the expected engagement revision, deduplicate effects and provide authoritative status. |
+| Engagement manager | Own file creation, opening and decisions. Validate the original offer before admitting a new decision and replay an accepted decision idempotently. The manager asks the template authority to order new decision admission with withdrawal. An earlier withdrawal rejects new admission. An earlier admission can complete while its grant is valid and the expected file revision still matches. Enforce admission for the actual downstream pool, validate the expected engagement revision, deduplicate effects and provide authoritative status. |
 | Regional exception planner | Plan jobs for unknown or flagged baselines against the publication's pinned engagement snapshot. Commit each page and its outbox records in the same transaction. |
 | Regional Java worker | Claim deliveries in a durable execution ledger, reserve authorizations against the attempt budget, reconcile uncertain outcomes and acknowledge SQS after committing a terminal result. The engagement manager admits work against the shared downstream limit. |
 
@@ -138,6 +131,49 @@ The offer receipt identifies the original offer evaluated for the decision. The 
 
 The regional worker receives new work from SQS. Its ledger stores ownership and execution state. A recovery task scans the ledger for unresolved attempts, including work whose delivery reached the DLQ. It can resolve existing attempts independently of delivery. New attempts for DLQ work require redrive. The PostgreSQL polling path for fresh jobs belongs to the exercise. A regional SQS consumer and the real manager adapter are deployment work. [Amazon RDS for PostgreSQL](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_PostgreSQL.html) · [Amazon ECS services](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/ecs_services.html)
 
+### Background delivery and reconciliation
+
+```mermaid
+---
+config:
+  theme: neutral
+  htmlLabels: false
+  flowchart:
+    rankSpacing: 24
+    nodeSpacing: 32
+    wrappingWidth: 183
+---
+flowchart TB
+    accTitle: Proposed regional background verification and recovery
+    accDescr: The planner atomically commits the page checkpoint and its jobs in a PostgreSQL outbox. A relay publishes committed jobs to SQS Standard. The worker uses a PostgreSQL ledger to record claims and attempt outcomes. The ledger reconciler can query the engagement manager independently of SQS. Repeated unacknowledged deliveries can enter a dead-letter queue and be redriven without replacing the operation ID or its durable history and budget.
+
+    PLANNER["Exception planner"]
+    OUTBOX[("PostgreSQL page checkpoint and outbox")]
+    RELAY["Outbox relay"]
+    QUEUE["SQS Standard"]
+    DLQ["Dead-letter queue"]
+    WORKER["Java fan-out worker"]
+    LEDGER[("PostgreSQL execution ledger")]
+    RECOVERY["Ledger reconciler"]
+    MANAGER["Engagement manager<br/>Shared admission and effects"]
+
+    PLANNER -->|"Commit page and jobs atomically"| OUTBOX
+    OUTBOX -->|"Read committed jobs"| RELAY
+    RELAY -->|"Publish OperationId"| QUEUE
+    QUEUE -->|"Deliver verification job"| WORKER
+    QUEUE -.->|"Receive limit"| DLQ
+    DLQ -.->|"Redrive"| QUEUE
+    WORKER <-->|"Claim and settle attempts"| LEDGER
+    WORKER -->|"Submit or query status"| MANAGER
+    RECOVERY <-->|"Scan and settle unresolved attempts"| LEDGER
+    RECOVERY -->|"Query the same attempt"| MANAGER
+
+    classDef background fill:#ddf4ff,stroke:#218bff,color:#24292f
+    classDef regional fill:#e6ffec,stroke:#2da44e,color:#24292f
+    class PLANNER,OUTBOX,RELAY,QUEUE,DLQ,WORKER,LEDGER,RECOVERY background
+    class MANAGER regional
+```
+
 ### Producer and delivery
 
 1. The exception planner commits its snapshot ID, cursor and one outbox record per planned `OperationId` atomically. A relay publishes committed records and marks each sent only after SQS confirms it. After a rollback there is nothing to publish. If the relay loses the response or stops before recording the send, it republishes with the same operation ID. The consumer must tolerate duplicate deliveries and reordering.
@@ -151,9 +187,15 @@ The regional worker receives new work from SQS. Its ledger stores ownership and 
 1. On receipt, claim the `OperationId` in the regional ledger using an expiring claim and a token that guards writes. If a terminal result is already present, delete the delivery using its current receipt handle. If another claimant is active, defer the delivery. For a new submission, persist its attempt ID and reserve one authorization against the durable budget before sending.
 2. The engagement manager atomically admits work against the shared limit and keeps the slot until authoritative completion or enforced cancellation. It durably ties the result to the operation key so duplicate requests can observe the same effect. If the pool is full, the manager can return a distinct, fenced capacity denial. Persist that denial, return the reserved authorization once for that attempt and defer the delivery. Uncertain submissions keep their budget reservation while the worker reconciles them. A worker lease, SQS visibility deadline and ECS task lifetime are delivery or ownership signals. Capacity follows the operation at the manager. All replicas sharing the same physical pool use the same authority, even if their deliveries are regional. **20 owner slots** remains a sizing assumption to validate.
 3. After a timeout or expired claim, recover the same attempt and query the manager. An absent record alone leaves the outcome uncertain. The manager must confirm success, reject permanently, or prove that an earlier attempt had no effect and cannot execute late. A confirmed no-effect result permits a new attempt within budget. A fenced capacity denial also allows a later submission after deferral. Use the same operation ID and a distinct attempt ID for each new submission.
-4. While the worker owns a delivery, extend visibility as needed within SQS limits. Commit the terminal result before calling `DeleteMessage`. A duplicate after commit can be acknowledged from that result. An unresolved attempt stays in the ledger for reconciliation after visibility expiry, task loss or DLQ movement. DLQ redrive uses the original operation ID and preserves its attempt history and budget. Retain idempotency and ledger state through the supported redrive and late-request window. Set visibility and the receive limit using the tested saturation and outage windows so normal recovery has time to complete before redrive is needed.
+4. While the worker owns a delivery, extend visibility as needed within SQS limits. Commit terminal success, permanent rejection or confirmed retry-budget exhaustion in the ledger before calling `DeleteMessage`. A duplicate delivery of a terminal operation is acknowledged from the stored result.
 
-[SQS visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html) · [SQS dead-letter queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html)
+### Dead-letter delivery and redrive
+
+SQS moves a repeatedly received, unacknowledged delivery to the DLQ under its configured `maxReceiveCount`. The receive limit belongs to SQS. The submission budget belongs to the operation's durable ledger. An uncertain attempt remains in the ledger after visibility expiry, task loss or DLQ transfer. The ledger reconciler can query and settle that same attempt without a live SQS receipt.
+
+After diagnosing and correcting the delivery failure, operators can redrive the original message. SQS assigns a new message ID. The payload's `OperationId`, attempt history, result and remaining budget stay the same. If the ledger already contains a terminal result, acknowledge the redelivery from that result. If an attempt is uncertain, reconcile it first. A submission requires an available authorization in the durable budget and a delivery on the source queue. When a previous attempt exists, a replacement also requires authoritative evidence that the previous attempt had no effect and cannot execute later. Retain the ledger and downstream idempotency records through the supported redrive and late-request window. Size visibility and the receive limit from saturation and outage tests.
+
+[SQS visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html) · [SQS dead-letter queues](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-dead-letter-queues.html) · [SQS redrive](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-configure-dead-letter-queue-redrive.html)
 
 ## Evidence required for regional readiness
 

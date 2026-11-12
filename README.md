@@ -44,9 +44,9 @@ See the [Java package structure](docs/worker-architecture.md#package-structure) 
 The system proposal places the worker in a regional background verification flow alongside the template catalog, regional updates API, summary service and engagement manager. The system guide shows who owns the offer receipt for a decision, the view receipt for a displayed summary, and the downstream admission and outcome. It also traces the two reference APIs from their controlled fixtures to their observed results. [System architecture](docs/system-architecture.md) · [Offer receipt and decision replay](docs/system-architecture.md#offer-receipt-and-decision-replay-in-the-regional-reference-api)
 
 <!-- Image exported from the Mermaid diagram in docs/system-architecture.md. -->
-![Proposed regional architecture connecting shared template publication with the regional updates API, summary service, engagement manager and SQS background worker.](docs/system-architecture.svg)
+![Proposed regional offer and summary flow showing decision admission and withdrawal and summary generation on a miss.](docs/system-architecture.svg)
 
-The PDF contains the original design on pages 1–6 and an updated implementation and test appendix. The AWS workbook models the proposed rollout with editable volume and rate assumptions. [Architecture PDF](docs/architecture.pdf) · [AWS cost model](docs/aws-cost-model.xlsx)
+[Proposed background delivery and reconciliation diagram](docs/system-architecture.md#background-delivery-and-reconciliation). The PDF contains the regional proposal on pages 1–6 and the repository's recorded implementation and test baseline in its appendix. The AWS workbook models the proposed rollout with editable volume and rate assumptions. [Architecture PDF](docs/architecture.pdf) · [AWS cost model](docs/aws-cost-model.xlsx)
 
 ## Run locally
 
