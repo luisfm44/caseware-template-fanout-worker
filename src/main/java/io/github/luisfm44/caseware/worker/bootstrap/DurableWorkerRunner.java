@@ -31,7 +31,8 @@ final class DurableWorkerRunner implements ApplicationRunner {
         var idleDelay = milliseconds("worker.idle-ms", 250);
         var timeout = milliseconds("worker.http-timeout-ms", 1_000);
         var downstreamOrigin = URI.create(environment.getRequiredProperty("FANOUT_DOWNSTREAM_URL"));
-        var jobs = new PostgresJobQueue(dataSource(), capacity, claimTtl);
+        // A recovered attempt gets the full HTTP deadline plus the configured claim margin to record the result.
+        var jobs = new PostgresJobQueue(dataSource(), capacity, claimTtl, timeout.plus(claimTtl));
 
         try (var client = HttpClient.newBuilder().connectTimeout(timeout).build()) {
             new DurableWorker(jobs, new HttpAttemptTransport(client, downstreamOrigin, timeout), idleDelay).consume();

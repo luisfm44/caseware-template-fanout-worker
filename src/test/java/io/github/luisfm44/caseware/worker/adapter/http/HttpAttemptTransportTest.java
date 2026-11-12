@@ -5,10 +5,15 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.net.http.HttpClient;
+import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
@@ -24,6 +29,9 @@ import org.junit.jupiter.params.provider.CsvSource;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class HttpAttemptTransportTest {
 
@@ -78,6 +86,76 @@ class HttpAttemptTransportTest {
         } finally {
             server.stop(0);
         }
+    }
+
+    @Test
+    void timesOutWaitingForTheBodyAfterHeadersArrive() throws Exception {
+        var headersSent = new CountDownLatch(1);
+        var releaseBody = new CountDownLatch(1);
+        var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/resolve", exchange -> {
+            try (exchange) {
+                read(exchange);
+                var body = "APPLIED".getBytes(UTF_8);
+                exchange.sendResponseHeaders(200, body.length);
+                exchange.getResponseBody().flush();
+                headersSent.countDown();
+                if (releaseBody.await(5, TimeUnit.SECONDS)) {
+                    exchange.getResponseBody().write(body);
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        server.start();
+        try (var client = HttpClient.newHttpClient()) {
+            try {
+                var origin = URI.create("http://127.0.0.1:" + server.getAddress().getPort());
+                var transport = new HttpAttemptTransport(client, origin, Duration.ofSeconds(1));
+
+                assertThrows(HttpTimeoutException.class, () -> transport.resolve(OPERATION, ATTEMPT));
+                assertThat(headersSent.getCount()).isZero();
+            } finally {
+                releaseBody.countDown();
+            }
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void propagatesAnExchangeFailureAsAnUnconfirmedOutcome() throws Exception {
+        var client = mock(HttpClient.class);
+        var cause = new IOException("downstream connection closed");
+        when(client.<String>sendAsync(any(), any())).thenReturn(CompletableFuture.failedFuture(cause));
+        var transport = new HttpAttemptTransport(client, URI.create("http://127.0.0.1:1"), Duration.ofSeconds(5));
+
+        var failure = assertThrows(IOException.class, () -> transport.resolve(OPERATION, ATTEMPT));
+        assertThat(failure).hasCause(cause);
+    }
+
+    @Test
+    void cancelsAnInFlightExchangeWhenInterrupted() throws Exception {
+        var client = mock(HttpClient.class);
+        var response = new CompletableFuture<HttpResponse<String>>();
+        when(client.<String>sendAsync(any(), any())).thenReturn(response);
+        var transport = new HttpAttemptTransport(client, URI.create("http://127.0.0.1:1"), Duration.ofSeconds(5));
+
+        Thread.currentThread().interrupt();
+        try {
+            assertThrows(InterruptedException.class, () -> transport.resolve(OPERATION, ATTEMPT));
+            assertThat(response).isCancelled();
+        } finally {
+            Thread.interrupted();
+        }
+    }
+
+    @Test
+    void rejectsANonPositiveHttpDeadline() {
+        var client = mock(HttpClient.class);
+        var origin = URI.create("http://127.0.0.1:1");
+
+        assertThrows(IllegalArgumentException.class, () -> new HttpAttemptTransport(client, origin, Duration.ZERO));
     }
 
     private static HttpAttemptTransport transport(HttpClient client, HttpServer server) {

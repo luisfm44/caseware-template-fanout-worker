@@ -14,9 +14,12 @@ import io.github.luisfm44.caseware.worker.execution.port.JobQueue.Claim;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class DurableWorkerTest {
@@ -37,6 +40,7 @@ class DurableWorkerTest {
         when(transport.submit(OPERATION, ATTEMPT)).thenReturn(new Reply(Outcome.APPLIED, Duration.ZERO));
         when(transport.resolve(OPERATION, ATTEMPT)).thenReturn(new Reply(Outcome.PENDING, Duration.ofSeconds(2)));
         when(jobs.settle(fresh, ATTEMPT, Outcome.APPLIED, Duration.ofMillis(100))).thenReturn(true);
+        when(jobs.defer(recovering, Duration.ofSeconds(2))).thenReturn(true);
 
         worker.process(fresh);
         worker.process(recovering);
@@ -86,5 +90,33 @@ class DurableWorkerTest {
         } finally {
             Thread.interrupted();
         }
+    }
+
+    @Test
+    void retriesConsecutiveQueueDisconnectsAndStopsWhenInterruptedDuringTheWait() {
+        var unavailable = new JobQueue.Unavailable(new IOException("disconnected"));
+        when(jobs.claimReady()).thenThrow(unavailable).thenThrow(unavailable).thenAnswer(ignored -> {
+            Thread.currentThread().interrupt();
+            return Optional.empty();
+        });
+
+        try {
+            worker.consume();
+            assertThat(Thread.currentThread().isInterrupted()).isTrue();
+        } finally {
+            Thread.interrupted();
+        }
+
+        verify(jobs, times(3)).claimReady();
+        verifyNoInteractions(transport);
+    }
+
+    @Test
+    void propagatesFatalQueueErrors() {
+        var failure = new IllegalStateException("invalid schema");
+        when(jobs.claimReady()).thenThrow(failure);
+
+        assertThatThrownBy(worker::consume).isSameAs(failure);
+        verifyNoInteractions(transport);
     }
 }
