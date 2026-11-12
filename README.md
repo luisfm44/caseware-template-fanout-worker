@@ -13,7 +13,7 @@ This Caseware Staff Java take-home demonstrates how to plan a template publicati
 
 ### Runnable Java application
 
-Planning commits each page of jobs with its checkpoint in PostgreSQL. The `demo` profile exercises two logical workers in one JVM. The `postgres-worker` profile consumes planned jobs durably and shares a downstream capacity pool between JVMs through PostgreSQL.
+Planning pins a source snapshot and commits each page of jobs with its checkpoint in PostgreSQL. A resumed planner reads the stored snapshot ID and cursor. The `demo` profile exercises two logical workers in one JVM. The `postgres-worker` profile consumes planned jobs durably and shares a downstream capacity pool between JVMs through PostgreSQL.
 
 <!-- Image exported from the Mermaid diagram in docs/worker-architecture.md. -->
 ![Spring Boot demo flow from a publication through PostgreSQL planning, shared admission, downstream execution and the JSON report.](docs/worker-architecture.svg)
@@ -55,7 +55,7 @@ cat target/fanout-demo.json
 docker compose down
 ```
 
-Compose binds PostgreSQL to `127.0.0.1:55432` and keeps its data in a named volume. Reuse the same password when restarting with that volume. The default Maven build runs the unit tests. The `postgres-integration` profile adds tests for resume, replay and rollback against PostgreSQL. The demo uses a disposable schema and removes it after the run.
+Compose binds PostgreSQL to `127.0.0.1:55432` and keeps its data in a named volume. Reuse the same password when restarting with that volume. The default Maven build runs the unit tests. The `postgres-integration` profile adds PostgreSQL tests for resume, replay, rollback and snapshot recovery across JVMs with a controlled source. The demo uses a disposable schema and removes it after the run.
 
 If macOS file metadata interferes with a build on an external drive, add `-Dfanout.build.directory=/private/tmp/caseware-fanout-target` to the Maven command and use that directory in the `java -jar` path.
 

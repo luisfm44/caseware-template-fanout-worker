@@ -12,10 +12,9 @@ import io.github.luisfm44.caseware.worker.execution.model.OperationId;
 import io.github.luisfm44.caseware.worker.planning.FanoutStore;
 import io.github.luisfm44.caseware.worker.planning.Publication;
 
-
 public final class PostgresFanoutStore implements FanoutStore {
 
-    private static final Checkpoint INITIAL = new Checkpoint(0, null, false);
+    private static final Checkpoint INITIAL = new Checkpoint(0, null, false, null);
 
     private final DataSource dataSource;
 
@@ -33,10 +32,12 @@ public final class PostgresFanoutStore implements FanoutStore {
                         pages_committed BIGINT NOT NULL CHECK (pages_committed > 0),
                         next_cursor TEXT,
                         complete BOOLEAN NOT NULL,
+                        snapshot_id TEXT,
                         PRIMARY KEY (firm_id, publication_id),
                         CHECK (complete = (next_cursor IS NULL))
                     )
                     """);
+            statement.execute("ALTER TABLE fanout_checkpoint ADD COLUMN IF NOT EXISTS snapshot_id TEXT");
             statement.execute("""
                     CREATE TABLE IF NOT EXISTS fanout_job (
                         firm_id TEXT NOT NULL,
@@ -56,13 +57,15 @@ public final class PostgresFanoutStore implements FanoutStore {
     public Checkpoint checkpoint(Publication publication) {
         try (var connection = dataSource.getConnection();
                 var statement = connection.prepareStatement("""
-                        SELECT pages_committed, next_cursor, complete
+                        SELECT pages_committed, next_cursor, complete, snapshot_id
                         FROM fanout_checkpoint
                         WHERE firm_id = ? AND publication_id = ?
                         """)) {
             bindPublication(statement, 1, publication);
             try (var rows = statement.executeQuery()) {
-                return rows.next() ? new Checkpoint(rows.getLong(1), rows.getString(2), rows.getBoolean(3)) : INITIAL;
+                return rows.next()
+                        ? new Checkpoint(rows.getLong(1), rows.getString(2), rows.getBoolean(3), rows.getString(4))
+                        : INITIAL;
             }
         } catch (SQLException failure) {
             throw new IllegalStateException("Could not read fan-out checkpoint", failure);
@@ -98,9 +101,17 @@ public final class PostgresFanoutStore implements FanoutStore {
     }
 
     @Override
-    public boolean commitPage(Publication publication, Checkpoint expected, List<OperationId> jobs, String nextCursor) {
+    public boolean commitPage(Publication publication, Checkpoint expected, List<OperationId> jobs,
+            String nextCursor, String snapshotId) {
         if (expected.complete()) {
             return false;
+        }
+
+        if (snapshotId == null || snapshotId.isBlank()) {
+            throw new IllegalArgumentException("snapshotId must be non-blank");
+        }
+        if (expected.pagesCommitted() > 0 && !snapshotId.equals(expected.snapshotId())) {
+            throw new IllegalArgumentException("A committed checkpoint requires its original snapshot");
         }
 
         var pageJobs = List.copyOf(jobs);
@@ -113,7 +124,7 @@ public final class PostgresFanoutStore implements FanoutStore {
         try (var connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);
             try {
-                boolean advanced = advanceCheckpoint(connection, publication, expected, nextCursor);
+                boolean advanced = advanceCheckpoint(connection, publication, expected, nextCursor, snapshotId);
                 if (advanced) {
                     insertJobs(connection, pageJobs);
                     connection.commit();
@@ -135,17 +146,18 @@ public final class PostgresFanoutStore implements FanoutStore {
     }
 
     private static boolean advanceCheckpoint(
-            Connection connection, Publication publication, Checkpoint expected, String nextCursor)
+            Connection connection, Publication publication, Checkpoint expected, String nextCursor, String snapshotId)
             throws SQLException {
         if (expected.equals(INITIAL)) {
             try (var statement = connection.prepareStatement("""
-                    INSERT INTO fanout_checkpoint (firm_id, publication_id, pages_committed, next_cursor, complete)
-                    VALUES (?, ?, 1, ?, ?)
+                    INSERT INTO fanout_checkpoint (firm_id, publication_id, pages_committed, next_cursor, complete, snapshot_id)
+                    VALUES (?, ?, 1, ?, ?, ?)
                     ON CONFLICT (firm_id, publication_id) DO NOTHING
                     """)) {
                 bindPublication(statement, 1, publication);
                 statement.setString(3, nextCursor);
                 statement.setBoolean(4, nextCursor == null);
+                statement.setString(5, snapshotId);
                 return statement.executeUpdate() == 1;
             }
         }
@@ -154,13 +166,15 @@ public final class PostgresFanoutStore implements FanoutStore {
                 UPDATE fanout_checkpoint
                 SET pages_committed = pages_committed + 1, next_cursor = ?, complete = ?
                 WHERE firm_id = ? AND publication_id = ?
-                  AND pages_committed = ? AND next_cursor IS NOT DISTINCT FROM ? AND NOT complete
+                  AND pages_committed = ? AND next_cursor IS NOT DISTINCT FROM ?
+                  AND snapshot_id = ? AND NOT complete
                 """)) {
             statement.setString(1, nextCursor);
             statement.setBoolean(2, nextCursor == null);
             bindPublication(statement, 3, publication);
             statement.setLong(5, expected.pagesCommitted());
             statement.setString(6, expected.nextCursor());
+            statement.setString(7, expected.snapshotId());
             return statement.executeUpdate() == 1;
         }
     }

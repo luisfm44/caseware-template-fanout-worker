@@ -1,8 +1,12 @@
 package io.github.luisfm44.caseware.worker.planning;
 
+import java.util.List;
+
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.NullAndEmptySource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
@@ -16,6 +20,14 @@ class PublicationFanoutTest {
         assertThatThrownBy(() -> new Publication(firmId, publicationId))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("firmId and publicationId must be non-blank");
+    }
+
+    @ParameterizedTest
+    @NullAndEmptySource
+    @ValueSource(strings = " ")
+    void requiresASnapshotIdEvenOnAnEmptyFinalPage(String snapshotId) {
+        assertThatThrownBy(() -> new EngagementSource.Page(List.of(), null, snapshotId))
+                .isInstanceOf(IllegalArgumentException.class).hasMessage("snapshotId must be non-blank");
     }
 
     @Test

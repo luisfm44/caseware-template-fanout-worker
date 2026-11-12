@@ -3,7 +3,7 @@ package io.github.luisfm44.caseware.worker.planning;
 import java.util.Objects;
 
 import io.github.luisfm44.caseware.worker.execution.model.OperationId;
-
+import io.github.luisfm44.caseware.worker.planning.EngagementSource.SnapshotUnavailableException;
 
 /** Converts each bounded page of a publication into durable worker jobs. */
 public final class PublicationFanout {
@@ -36,8 +36,16 @@ public final class PublicationFanout {
                 return false;
             }
 
+            var snapshotId = checkpoint.snapshotId();
+            if (checkpoint.pagesCommitted() > 0 && snapshotId == null) {
+                throw new SnapshotUnavailableException("Cannot resume a checkpoint without a pinned engagement snapshot");
+            }
+
             var cursor = checkpoint.nextCursor();
-            var page = source.fetch(publication, cursor, pageSize);
+            var page = source.fetch(publication, snapshotId, cursor, pageSize);
+            if (snapshotId != null && !snapshotId.equals(page.snapshotId())) {
+                throw new SnapshotUnavailableException("Engagement source returned a different snapshot");
+            }
             if (page.engagements().size() > pageSize) {
                 throw new IllegalStateException("Engagement source exceeded the page size");
             }
@@ -49,7 +57,7 @@ public final class PublicationFanout {
                     .map(engagement -> new OperationId(publication.firmId(), engagement.engagementId(),
                             publication.publicationId(), engagement.engagementRevision()))
                     .toList();
-            if (store.commitPage(publication, checkpoint, jobs, page.nextCursor())) {
+            if (store.commitPage(publication, checkpoint, jobs, page.nextCursor(), page.snapshotId())) {
                 return true;
             }
         }

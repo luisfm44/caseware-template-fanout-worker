@@ -38,6 +38,7 @@ final class DemoRunner implements ApplicationRunner {
 
     private static final System.Logger LOGGER = System.getLogger(DemoRunner.class.getName());
     private static final Publication PUBLICATION = new Publication("demo-firm", "demo-publication");
+    private static final String SNAPSHOT_ID = "demo-engagements-v1";
     private static final int ENGAGEMENT_COUNT = 7;
     private static final int PAGE_SIZE = 2;
     private static final int CAPACITY = 3;
@@ -83,20 +84,22 @@ final class DemoRunner implements ApplicationRunner {
         var engagements = IntStream.rangeClosed(1, ENGAGEMENT_COUNT)
                 .mapToObj(index -> new Engagement("engagement-" + index, "revision-1"))
                 .toList();
-        EngagementSource source = (publication, cursor, limit) -> {
+        EngagementSource source = (publication, snapshotId, cursor, limit) -> {
             int start = cursor == null ? 0 : Integer.parseInt(cursor);
             int end = Math.min(start + limit, engagements.size());
-            return new Page(engagements.subList(start, end), end == engagements.size() ? null : Integer.toString(end));
+            return new Page(engagements.subList(start, end), end == engagements.size() ? null : Integer.toString(end),
+                    SNAPSHOT_ID);
         };
 
         var store = new PostgresFanoutStore(dataSource);
         new PublicationFanout(source, store, PAGE_SIZE).planNextPage(PUBLICATION);
 
         var resumedStore = new PostgresFanoutStore(dataSource);
-        verifyCheckpoint(resumedStore.checkpoint(PUBLICATION), new Checkpoint(1, Integer.toString(PAGE_SIZE), false));
+        verifyCheckpoint(resumedStore.checkpoint(PUBLICATION),
+                new Checkpoint(1, Integer.toString(PAGE_SIZE), false, SNAPSHOT_ID));
         new PublicationFanout(source, resumedStore, PAGE_SIZE).plan(PUBLICATION);
         var checkpoint = resumedStore.checkpoint(PUBLICATION);
-        verifyCheckpoint(checkpoint, new Checkpoint(PLANNED_PAGES, null, true));
+        verifyCheckpoint(checkpoint, new Checkpoint(PLANNED_PAGES, null, true, SNAPSHOT_ID));
 
         var jobs = resumedStore.listJobs(PUBLICATION, ENGAGEMENT_COUNT + 1);
         var expected = engagements.stream()
