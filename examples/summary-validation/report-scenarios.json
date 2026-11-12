@@ -91,6 +91,12 @@
       "slug": "localized-receipt",
       "title": "Original French view receipt",
       "expected": "v8 contains only C17. The receipt still returns the original French v7 artifact with C17, C18 and both approved hashes. An invalid v8 grouping leaves its published artifact unchanged."
+    },
+    {
+      "test": "rejectsEarlierIdentifiersInAReplacementMock",
+      "slug": "replacement-receipt",
+      "title": "Receipt from a previous mock instance",
+      "expected": "After generating v8 in a fresh mock, the old v7 receipt and summary version return HTTP 404. The new receipt returns the v8 artifact."
     }
   ]
 }

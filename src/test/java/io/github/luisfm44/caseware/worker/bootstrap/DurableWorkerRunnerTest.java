@@ -22,8 +22,8 @@ class DurableWorkerRunnerTest {
                 .withProperty("FANOUT_DB_PASSWORD", "test")
                 .withProperty("FANOUT_DOWNSTREAM_URL", "http://127.0.0.1:1");
         try (var queues = mockConstruction(PostgresJobQueue.class, (queue, context) -> {
-            assertThat(context.arguments()).hasSize(3);
-            assertThat(context.arguments().subList(1, 3)).isEqualTo(List.of(2, Duration.ofSeconds(2)));
+            assertThat(context.arguments()).hasSize(4);
+            assertThat(context.arguments().subList(1, 4)).isEqualTo(List.of(2, Duration.ofSeconds(2), Duration.ofSeconds(3)));
             when(queue.claimReady()).thenAnswer(ignored -> {
                 Thread.currentThread().interrupt();
                 return Optional.empty();

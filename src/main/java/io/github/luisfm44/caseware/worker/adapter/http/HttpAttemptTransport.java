@@ -6,8 +6,12 @@ import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 import java.util.UUID;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import io.github.luisfm44.caseware.worker.execution.model.OperationId;
 import io.github.luisfm44.caseware.worker.execution.port.AttemptTransport;
@@ -21,6 +25,9 @@ public final class HttpAttemptTransport implements AttemptTransport {
     private final Duration timeout;
 
     public HttpAttemptTransport(HttpClient client, URI origin, Duration timeout) {
+        if (!timeout.isPositive()) {
+            throw new IllegalArgumentException("HTTP timeout must be positive");
+        }
         this.client = client;
         this.origin = origin;
         this.timeout = timeout;
@@ -45,10 +52,9 @@ public final class HttpAttemptTransport implements AttemptTransport {
                 + "&attemptId=" + attemptId;
         var request = HttpRequest.newBuilder(origin.resolve(path))
                 .header("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
-                .timeout(timeout)
                 .POST(HttpRequest.BodyPublishers.ofString(body))
                 .build();
-        var response = client.send(request, HttpResponse.BodyHandlers.ofString(UTF_8));
+        var response = exchange(request);
         if (response.statusCode() != 200) {
             throw new IOException("Unconfirmed downstream response: HTTP " + response.statusCode());
         }
@@ -58,6 +64,21 @@ public final class HttpAttemptTransport implements AttemptTransport {
             return new Reply(outcome, Duration.ofSeconds(Integer.toUnsignedLong(seconds)));
         } catch (IllegalArgumentException invalidResponse) {
             throw new IOException("Invalid downstream response", invalidResponse);
+        }
+    }
+
+    private HttpResponse<String> exchange(HttpRequest request) throws IOException, InterruptedException {
+        // On Java 25, HttpRequest.timeout stops at the headers. Await the body under the same deadline.
+        var response = client.sendAsync(request, HttpResponse.BodyHandlers.ofString(UTF_8));
+        try {
+            return response.get(TimeUnit.NANOSECONDS.convert(timeout), TimeUnit.NANOSECONDS);
+        } catch (TimeoutException deadline) {
+            throw new HttpTimeoutException("Downstream response exceeded " + timeout);
+        } catch (ExecutionException failed) {
+            throw new IOException("Could not read downstream response", failed.getCause());
+        } finally {
+            // This is a no-op after completion and cancels an active exchange after timeout or interruption.
+            response.cancel(true);
         }
     }
 

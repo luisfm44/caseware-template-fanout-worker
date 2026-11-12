@@ -12,6 +12,7 @@ import javax.sql.DataSource;
 
 import io.github.luisfm44.caseware.worker.execution.model.OperationId;
 import io.github.luisfm44.caseware.worker.execution.port.AttemptTransport.Outcome;
+import io.github.luisfm44.caseware.worker.execution.port.JobQueue.Claim;
 import io.github.luisfm44.caseware.worker.planning.Publication;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -99,6 +100,30 @@ class PostgresJobQueueIT {
         }
 
         assertThat(List.of(state(FIRST), state(SECOND))).containsExactlyInAnyOrder("READY", "SUBMITTED");
+    }
+
+    @Test
+    void defersAnExpiredCurrentAttemptAndLeavesTheFreeSlotForAnotherJob() throws SQLException {
+        seed(FIRST, SECOND);
+        var firstWorker = new PostgresJobQueue(database, 2, LEASE);
+        var secondWorker = new PostgresJobQueue(database, 2, LEASE);
+        var first = firstWorker.claimReady().orElseThrow();
+        expireFirstClaim();
+
+        var mismatchedAttempt = new Claim(FIRST, first.token(), UUID.randomUUID(), 1, 0, false);
+        assertThat(firstWorker.defer(mismatchedAttempt, Duration.ofHours(1))).isFalse();
+        assertThat(firstWorker.defer(first, Duration.ofHours(1))).isTrue();
+        assertThat(secondWorker.claimReady().orElseThrow().operationId()).isEqualTo(SECOND);
+        assertThat(state(FIRST)).isEqualTo("SUBMITTED");
+        assertThat(secondWorker.claimReady()).isEmpty();
+
+        execute("UPDATE fanout_job SET available_at = clock_timestamp() WHERE engagement_id = 'first'");
+        var recovered = secondWorker.claimReady().orElseThrow();
+        assertThat(recovered.reconciling()).isTrue();
+        assertThat(recovered.attemptId()).isEqualTo(first.attemptId());
+        assertThat(recovered.pollCount()).isEqualTo(1);
+        assertThat(firstWorker.defer(first, Duration.ofHours(1))).isFalse();
+        assertThat(secondWorker.settle(recovered, recovered.attemptId(), Outcome.APPLIED, NOW)).isTrue();
     }
 
     @Test
@@ -195,6 +220,8 @@ class PostgresJobQueueIT {
         assertThatThrownBy(() -> new PostgresJobQueue(database, 0, LEASE))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new PostgresJobQueue(database, 1, NOW))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new PostgresJobQueue(database, 1, LEASE, NOW))
                 .isInstanceOf(IllegalArgumentException.class);
         new PostgresJobQueue(database, 1, LEASE);
         assertThatThrownBy(() -> new PostgresJobQueue(database, 2, LEASE))
