@@ -105,6 +105,18 @@ The GitHub Actions workflow uploads `regional-version-selection-e2e` for each co
 
 [Download the verified HTML report](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43130872911/artifacts/13905271607) · [GitHub Actions reports](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/regional-version-selection.yml) · [Local report instructions](examples/regional-version-selection/README.md) · [Scenario screenshots](docs/evidence/issue-26/README.md) · [Wiki guide](https://github.com/luisfm44/caseware-template-fanout-worker/wiki/Regional-Version-Selection-Tests)
 
+### Summary validation E2E tests
+
+With JDK 25, run the reference summary API's HTTP tests from the repository root.
+
+```sh
+./mvnw -f examples/summary-validation/pom.xml test
+```
+
+The suite uses approved template fixtures and a controlled grouping provider to check the net changes, fallback, editorial review and original view receipt. In GitHub Actions, download `summary-validation-e2e` and open `evidence/index.html` in the extracted archive to see the scenario results.
+
+[Local report instructions](examples/summary-validation/README.md) · [GitHub Actions reports](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/summary-validation.yml) · [Owner-side acceptance criteria](docs/owner-acceptance.md#summary-service)
+
 ## GitHub Actions
 
 - **Verify and scan** runs on pull requests, pushes to main, or manual dispatch. The `verify` job runs the unit and PostgreSQL integration tests, packages the executable JAR, and uploads both sets of test reports. The `security` job scans dependencies and tracked sources with Trivy. High or critical findings fail the scan.
