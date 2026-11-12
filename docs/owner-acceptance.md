@@ -23,6 +23,8 @@ Capture fixture inputs and assertions, including the catalog revision and the ef
 
 Implementation follow-up [summary-validation suite](https://github.com/luisfm44/caseware-template-fanout-worker/issues/27). Run the real comparison, validation and rendering paths with archived template fixtures and a deterministic substitute for optional model grouping. Build one fixture per approved version and pin the exact content hashes used by the service's artifact contract. Change the returned bytes independently of the requested key to exercise hash validation.
 
+The [local reference API](../examples/summary-validation/README.md) exercises these promotion checks over HTTP with controlled dependencies and produces a report for each run. Acceptance evidence comes from the owning service running equivalent scenarios against its own artifact store and rendering path.
+
 Use a v4 baseline with `/inventory/signoffRequired` set to `false` and no `/inventory/exceptionReason`. Let v5 add a temporary field that v7 removes. In v7, require sign-off and add the exception-reason field. Label those two net changes C17 and C18 in the grouping fixture and supply the permitted topic set for each.
 
 | Case | Given and when | Required outcome |

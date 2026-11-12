@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Render the regional mock's Surefire results and captured HTTP traffic as offline HTML."""
+"""Render a Caseware mockup's Surefire results and captured HTTP traffic as offline HTML."""
 
 from __future__ import annotations
 
@@ -155,9 +155,9 @@ def parse_events(testcase):
     return tuple(events)
 
 
-def read_results(xml):
+def read_results(xml, scenarios):
     suite = ET.parse(xml).getroot()
-    expected = {scenario.test for scenario in SCENARIOS}
+    expected = {scenario.test for scenario in scenarios}
     results = {}
     for testcase in suite.findall("testcase"):
         name = testcase.get("name")
@@ -195,13 +195,13 @@ def filename(index, scenario):
     return f"{index:02d}-{scenario.slug}.html"
 
 
-def layout(title, contents):
+def layout(title, contents, issue):
     return f"""<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{escape(title)} · Caseware #26</title>
+<title>{escape(title)} · Caseware #{issue}</title>
 <style>{STYLES}</style>
 </head>
 <body><main>{contents}
@@ -230,7 +230,7 @@ def render_exchange(event):
 </li>"""
 
 
-def render_case(index, scenario, result):
+def render_case(index, scenario, result, total, issue):
     http_count = sum(isinstance(event, Exchange) for event in result.events)
     request_label = "request" if http_count == 1 else "requests"
     steps = "\n".join(
@@ -241,7 +241,7 @@ def render_case(index, scenario, result):
     timeline = f'<ol class="timeline">{steps}</ol>' if steps else '<p class="empty">No recorded events.</p>'
     content = f"""
 <header>
-    <div class="kicker"><a href="index.html">End-to-end tests</a><span>Scenario {index:02d} / {len(SCENARIOS)}</span></div>
+    <div class="kicker"><a href="index.html">End-to-end tests</a><span>Scenario {index:02d} / {total}</span></div>
     <h1>{escape(scenario.title)}</h1>
     <div class="metrics">{badge(result.outcome)}
       <span class="meta">{http_count} HTTP {request_label} · {result.duration:.3f} s</span></div>
@@ -249,41 +249,67 @@ def render_case(index, scenario, result):
 <p class="assertion"><strong>Expected result</strong> {escape(scenario.expected)}</p>
 {timeline}
 """
-    return layout(scenario.title, content)
+    return layout(scenario.title, content, issue)
 
 
-def render_index(results):
+def render_index(results, scenarios, title, issue):
     links = []
-    for index, scenario in enumerate(SCENARIOS, start=1):
+    for index, scenario in enumerate(scenarios, start=1):
         result = results[scenario.test]
         links.append(f"""
 <a href="{filename(index, scenario)}">{badge(result.outcome)}
 <h2>{index:02d} · {escape(scenario.title)}</h2>
 <p>{escape(scenario.expected)}</p></a>""")
     counts = {status: sum(r.outcome == status for r in results.values()) for status in ("pass", "fail", "skip")}
-    return layout("Regional mockup results", f"""
+    return layout(title, f"""
 <header>
-    <div class="kicker">Caseware · Issue #26</div>
-    <h1>Regional mockup results</h1>
+    <div class="kicker">Caseware · Issue #{issue}</div>
+    <h1>{escape(title)}</h1>
     <p class="meta">{len(results)} tests · {counts['pass']} passed · {counts['fail']} failed · {counts['skip']} skipped</p>
 </header>
 <div class="grid">{''.join(links)}</div>
-""")
+""", issue)
+
+
+def read_manifest(path):
+    if path is None:
+        return 26, "Regional mockup results", SCENARIOS
+    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        issue = int(data["issue"])
+        title = data["title"]
+        scenarios = tuple(Scenario(**row) for row in data["scenarios"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("invalid scenario manifest") from error
+    if issue < 1 or not isinstance(title, str) or not title.strip() or not scenarios:
+        raise ValueError("invalid report metadata")
+    for scenario in scenarios:
+        if not all(isinstance(value, str) and value.strip()
+                   for value in (scenario.test, scenario.slug, scenario.title, scenario.expected)):
+            raise ValueError("invalid scenario description")
+        if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", scenario.slug):
+            raise ValueError("invalid scenario filename")
+    if len({s.test for s in scenarios}) != len(scenarios):
+        raise ValueError("duplicate scenario test")
+    return issue, title, scenarios
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("surefire_xml", type=Path)
     parser.add_argument("output_dir", type=Path)
+    parser.add_argument("--manifest", type=Path, help="Read scenario metadata for a different suite.")
     args = parser.parse_args()
     try:
-        results = read_results(args.surefire_xml)
+        issue, title, scenarios = read_manifest(args.manifest)
+        results = read_results(args.surefire_xml, scenarios)
         args.output_dir.mkdir(parents=True, exist_ok=True)
-        for index, scenario in enumerate(SCENARIOS, start=1):
+        for index, scenario in enumerate(scenarios, start=1):
             (args.output_dir / filename(index, scenario)).write_text(
-                render_case(index, scenario, results[scenario.test]), encoding="utf-8"
+                render_case(index, scenario, results[scenario.test], len(scenarios), issue), encoding="utf-8"
             )
-        (args.output_dir / "index.html").write_text(render_index(results), encoding="utf-8")
+        (args.output_dir / "index.html").write_text(
+            render_index(results, scenarios, title, issue), encoding="utf-8")
     except (ET.ParseError, OSError, ValueError) as error:
         parser.exit(1, f"Could not generate the report: {error}\n")
 

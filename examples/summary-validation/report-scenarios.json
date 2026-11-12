@@ -1,0 +1,96 @@
+{
+  "issue": 27,
+  "title": "Summary validation mockup results",
+  "scenarios": [
+    {
+      "test": "groupsOnlyVerifiedNetChangesFromExactArtifacts",
+      "slug": "exact-pair",
+      "title": "Exact v4 → v7 and valid grouping",
+      "expected": "The approved hashes produce C17 and C18 only. The temporary v5 field leaves no net change. C18 describes field presence."
+    },
+    {
+      "test": "blocksChangedBytesAtEitherApprovedHash(String)[1]",
+      "slug": "baseline-hash-mismatch",
+      "title": "Baseline hash mismatch",
+      "expected": "Changed v4 bytes return HTTP 422 with no artifact. The grouping provider is never called."
+    },
+    {
+      "test": "blocksChangedBytesAtEitherApprovedHash(String)[2]",
+      "slug": "target-hash-mismatch",
+      "title": "Target hash mismatch",
+      "expected": "Changed v7 bytes return HTTP 422 with no artifact. The grouping provider is never called."
+    },
+    {
+      "test": "rejectsInvalidGroupingAndPublishesOnlyCompleteRules(String, String)[1]",
+      "slug": "omitted-change",
+      "title": "Omitted change",
+      "expected": "The grouping drops C18. The API publishes the complete rules summary with C17 and C18."
+    },
+    {
+      "test": "rejectsInvalidGroupingAndPublishesOnlyCompleteRules(String, String)[2]",
+      "slug": "duplicate-change",
+      "title": "Duplicate change",
+      "expected": "The grouping repeats C17. The API publishes the complete rules summary."
+    },
+    {
+      "test": "rejectsInvalidGroupingAndPublishesOnlyCompleteRules(String, String)[3]",
+      "slug": "fabricated-change",
+      "title": "Fabricated change",
+      "expected": "The grouping includes C99. The API publishes the complete rules summary."
+    },
+    {
+      "test": "rejectsInvalidGroupingAndPublishesOnlyCompleteRules(String, String)[4]",
+      "slug": "disallowed-topic",
+      "title": "Disallowed topic",
+      "expected": "The grouping assigns C17 to exceptions. The API publishes the complete rules summary."
+    },
+    {
+      "test": "rejectsInvalidGroupingAndPublishesOnlyCompleteRules(String, String)[5]",
+      "slug": "extra-prose",
+      "title": "Unverified prose",
+      "expected": "The grouping claims that entering a reason is mandatory. The API publishes only the verified rules text."
+    },
+    {
+      "test": "rejectsInvalidGroupingAndPublishesOnlyCompleteRules(String, String)[6]",
+      "slug": "trailing-content",
+      "title": "Trailing content",
+      "expected": "A second JSON value follows the grouping document. The API publishes the complete rules summary."
+    },
+    {
+      "test": "rejectsInvalidGroupingAndPublishesOnlyCompleteRules(String, String)[7]",
+      "slug": "invalid-json",
+      "title": "Invalid JSON",
+      "expected": "The API rejects malformed grouping JSON and publishes the complete rules summary."
+    },
+    {
+      "test": "preservesAnExistingVerifiedRulesArtifactWhenGroupingIsUnavailable(String)[1]",
+      "slug": "grouping-timeout",
+      "title": "Grouping timeout",
+      "expected": "The provider reports a timeout. The existing verified rules artifact stays published."
+    },
+    {
+      "test": "preservesAnExistingVerifiedRulesArtifactWhenGroupingIsUnavailable(String)[2]",
+      "slug": "grouping-input-limit",
+      "title": "Grouping input limit",
+      "expected": "The provider reports that its input limit was reached. The existing verified rules artifact stays published."
+    },
+    {
+      "test": "preservesAnExistingVerifiedRulesArtifactWhenGroupingIsUnavailable(String)[3]",
+      "slug": "grouping-budget",
+      "title": "Grouping budget exhausted",
+      "expected": "The provider reports budget exhaustion. The existing verified rules artifact stays published."
+    },
+    {
+      "test": "sendsAnUnsupportedMaterialEditForEditorialReviewWithoutPublishing",
+      "slug": "editor-review",
+      "title": "Unsupported material edit",
+      "expected": "The API sends the whole summary for editorial review without publishing a partial artifact."
+    },
+    {
+      "test": "keepsTheLocalizedArtifactPinnedToTheOriginalViewReceipt",
+      "slug": "localized-receipt",
+      "title": "Original French view receipt",
+      "expected": "v8 contains only C17. The receipt still returns the original French v7 artifact with C17, C18 and both approved hashes. An invalid v8 grouping leaves its published artifact unchanged."
+    }
+  ]
+}
