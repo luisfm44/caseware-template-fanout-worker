@@ -172,6 +172,38 @@ class DurableWorkerProcessIT {
     }
 
     @Test
+    void twoJvmsLetAStatusLookupOutliveTheSubmissionLeaseAndThenReleaseCapacity() throws Exception {
+        int leaseMillis = 200;
+        try (var manager = new RecordingManager(FirstRequest.HOLD_ALL_REPLIES, true);
+                var first = startWorker(manager.url(), "first", 1, leaseMillis)) {
+            eventually(first, () -> assertThat(manager.active()).isEqualTo(1));
+            var original = manager.submissions().getFirst();
+
+            try (var second = startWorker(manager.url(), "second", 1, leaseMillis, 8_000)) {
+                assertThat(second.process().pid()).isNotEqualTo(first.process().pid());
+                eventually(second, () -> assertThat(manager.resolutions()).containsExactly(original));
+                manager.completeAndReply(original);
+                eventually(first, () -> assertThat(Files.readString(first.log()))
+                        .contains("Discarded confirmed outcome for attempt " + original.id()));
+
+                // The first JVM can poll again while the second JVM's status response is held.
+                await().pollInterval(Duration.ofMillis(40)).during(Duration.ofMillis(leaseMillis * 3L))
+                        .atMost(Duration.ofSeconds(4)).untilAsserted(() -> {
+                            assertThat(manager.resolutions()).containsExactly(original);
+                            assertThat(manager.submissions()).containsExactly(original);
+                            assertThat(executions(database)).containsExactlyInAnyOrderEntriesOf(
+                                    Map.of(FIRST.engagementId(), new Execution("SUBMITTED", 1, original.id()),
+                                            NEXT.engagementId(), new Execution("READY", 0, null)));
+                        });
+
+                manager.releaseResolutionReplies();
+                completeNextAndVerify(second, manager);
+                assertThat(manager.resolutions()).containsExactly(original);
+            }
+        }
+    }
+
+    @Test
     void anotherJvmCanRetryAfterDownstreamFencesTheLateRequest() throws Exception {
         try (var manager = new RecordingManager(FirstRequest.HOLD_BEFORE_ADMISSION);
                 var first = startWorker(manager.url(), "first")) {
@@ -283,6 +315,11 @@ class DurableWorkerProcessIT {
     }
 
     private WorkerProcess startWorker(String managerUrl, String name, int capacity, int leaseMillis) throws IOException {
+        return startWorker(managerUrl, name, capacity, leaseMillis, 30_000);
+    }
+
+    private WorkerProcess startWorker(String managerUrl, String name, int capacity, int leaseMillis, int httpTimeoutMillis)
+            throws IOException {
         var command = new ArrayList<String>();
         command.add(Path.of(System.getProperty("java.home"), "bin", "java").toString());
         // With the coverage profile, graceful shutdown of the survivor records the code
@@ -295,7 +332,7 @@ class DurableWorkerProcessIT {
                 TemplateFanoutWorkerApplication.class.getName(),
                 "--spring.profiles.active=postgres-worker", "--spring.main.banner-mode=off",
                 "--worker.capacity=" + capacity, "--worker.lease-ms=" + leaseMillis, "--worker.idle-ms=25",
-                "--worker.http-timeout-ms=30000"));
+                "--worker.http-timeout-ms=" + httpTimeoutMillis));
         var output = logs.resolve(name + ".log");
         var builder = new ProcessBuilder(command).redirectErrorStream(true).redirectOutput(output.toFile());
         builder.environment().put("FANOUT_DB_URL", workerUrl);

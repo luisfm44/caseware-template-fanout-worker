@@ -25,12 +25,19 @@ public final class PostgresJobQueue implements JobQueue {
 
     private final DataSource dataSource;
     private final long claimMillis;
+    private final long reconciliationMillis;
 
     public PostgresJobQueue(DataSource dataSource, int capacity, Duration claimTtl) {
+        this(dataSource, capacity, claimTtl, claimTtl);
+    }
+
+    public PostgresJobQueue(DataSource dataSource, int capacity, Duration claimTtl, Duration reconciliationTtl) {
         this.dataSource = Objects.requireNonNull(dataSource, "dataSource");
         this.claimMillis = claimTtl.toMillis();
-        if (capacity <= 0 || claimMillis <= 0) {
-            throw new IllegalArgumentException("capacity and claim duration must be positive");
+        this.reconciliationMillis = reconciliationTtl.toMillis();
+        if (capacity <= 0 || claimMillis <= 0 || reconciliationMillis < claimMillis) {
+            throw new IllegalArgumentException("capacity and claim duration must be positive, and reconciliation "
+                    + "duration must be at least the claim duration");
         }
 
         transaction(connection -> {
@@ -131,7 +138,7 @@ public final class PostgresJobQueue implements JobQueue {
                           job.claim_token, job.attempt_id, job.submissions, job.poll_count
                 """)) {
             statement.setObject(1, UUID.randomUUID());
-            statement.setLong(2, claimMillis);
+            statement.setLong(2, reconciliationMillis);
             try (var rows = statement.executeQuery()) {
                 return rows.next() ? Optional.of(readClaim(rows, true)) : Optional.empty();
             }
@@ -206,19 +213,20 @@ public final class PostgresJobQueue implements JobQueue {
 
     /** Releases the claim for a later poll, retaining any uncertain attempt and its reservation. */
     @Override
-    public void defer(Claim claim, Duration delay) {
-        query(connection -> {
+    public boolean defer(Claim claim, Duration delay) {
+        return query(connection -> {
             try (var statement = connection.prepareStatement("""
                     UPDATE fanout_job
                     SET claim_token = NULL, claim_until = NULL,
                         available_at = clock_timestamp() + (? * INTERVAL '1 millisecond'),
-                        poll_count = CASE WHEN attempt_id IS NULL THEN 0 ELSE LEAST(poll_count + 1, 30) END
+                        poll_count = LEAST(poll_count + 1, 30)
                     """ + MATCHING_CLAIM + """
-                      AND claim_until > clock_timestamp()
+                      AND attempt_id = ?
                     """)) {
                 statement.setLong(1, delay.toMillis());
                 bindClaim(statement, 2, claim);
-                return statement.executeUpdate();
+                statement.setObject(7, claim.attemptId());
+                return statement.executeUpdate() == 1;
             }
         });
     }

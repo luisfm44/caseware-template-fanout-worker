@@ -37,6 +37,7 @@ class DurableWorkerTest {
         when(transport.submit(OPERATION, ATTEMPT)).thenReturn(new Reply(Outcome.APPLIED, Duration.ZERO));
         when(transport.resolve(OPERATION, ATTEMPT)).thenReturn(new Reply(Outcome.PENDING, Duration.ofSeconds(2)));
         when(jobs.settle(fresh, ATTEMPT, Outcome.APPLIED, Duration.ofMillis(100))).thenReturn(true);
+        when(jobs.defer(recovering, Duration.ofSeconds(2))).thenReturn(true);
 
         worker.process(fresh);
         worker.process(recovering);

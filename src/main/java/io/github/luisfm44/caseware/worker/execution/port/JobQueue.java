@@ -13,8 +13,11 @@ public interface JobQueue {
     /** Reclaims a due attempt or reserves capacity and claims a fresh one. */
     Optional<Claim> claimReady();
 
-    /** Releases the claim for a later poll while retaining the attempt and its reservation. */
-    void defer(Claim claim, Duration delay);
+    /**
+     * Releases the claim for a later poll while retaining the attempt and its reservation.
+     * Returns false when the claim token or attempt has changed. Lease expiry alone does not prevent deferral.
+     */
+    boolean defer(Claim claim, Duration delay);
 
     /**
      * Records a confirmed outcome and releases its reservation if the claim token and attempt still match.
