@@ -50,15 +50,22 @@ public final class DurableWorker {
             if (claim.pollCount() == 0) {
                 LOGGER.log(System.Logger.Level.WARNING, "Downstream outcome is uncertain; will reconcile", unavailable);
             }
-            jobs.defer(claim, backoff(claim.pollCount()));
+            defer(claim, backoff(claim.pollCount()));
             return;
         }
 
         if (reply.outcome() == Outcome.PENDING) {
-            jobs.defer(claim, delay(claim.pollCount(), reply.retryAfter()));
+            defer(claim, delay(claim.pollCount(), reply.retryAfter()));
         } else if (!jobs.settle(claim, attempt, reply.outcome(), delay(claim.submissions() - 1, reply.retryAfter()))) {
             LOGGER.log(System.Logger.Level.INFO, "Discarded confirmed outcome for attempt {0} after losing its claim",
                     attempt);
+        }
+    }
+
+    private void defer(Claim claim, Duration delay) {
+        if (!jobs.defer(claim, delay)) {
+            LOGGER.log(System.Logger.Level.INFO, "Discarded deferral for attempt {0} after losing its claim",
+                    claim.attemptId());
         }
     }
 
