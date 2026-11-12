@@ -93,6 +93,18 @@ java -jar target/template-fanout-worker.jar --spring.profiles.active=postgres-wo
 
 All replicas for a pool use the same PostgreSQL schema, configured capacity and downstream. The [worker design](docs/worker-design.md#durable-consumption-and-shared-capacity) specifies the HTTP contract and the regional integration responsibilities.
 
+### Regional version selection E2E tests
+
+Use JDK 25 and run this command from the repository root. The mockup starts a local Spring Boot HTTP server and exercises version offers against a controlled catalog and engagement manager.
+
+```sh
+./mvnw -f examples/regional-version-selection/pom.xml test
+```
+
+The GitHub Actions workflow uploads `regional-version-selection-e2e` for each completed suite that produces test results. Download the artifact, extract it and open `evidence/index.html` to inspect the HTTP exchanges for each scenario.
+
+[Download the verified HTML report](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43130872911/artifacts/13905271607) · [GitHub Actions reports](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/regional-version-selection.yml) · [Local report instructions](examples/regional-version-selection/README.md) · [Scenario screenshots](docs/evidence/issue-26/README.md) · [Wiki guide](https://github.com/luisfm44/caseware-template-fanout-worker/wiki/Regional-Version-Selection-Tests)
+
 ## GitHub Actions
 
 - **Verify and scan** runs on pull requests, pushes to main, or manual dispatch. The `verify` job runs the unit and PostgreSQL integration tests, packages the executable JAR, and uploads both sets of test reports. The `security` job scans dependencies and tracked sources with Trivy. High or critical findings fail the scan.
