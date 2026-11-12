@@ -1,8 +1,8 @@
 # Worker design decisions
 
-The repository implements the worker contracts for admission, durable planning, and downstream recovery. The [system design and implementation appendix](architecture.pdf) place these contracts within the wider Caseware proposal. The [worker architecture](worker-architecture.md) traces the code paths and their boundaries.
+The repository implements publication planning and the durable PostgreSQL worker. The executable demo illustrates the same operation identity and recovery contract with two logical workers in one JVM. The [system design and implementation appendix](architecture.pdf) place these contracts within the wider Caseware proposal. The [worker architecture](worker-architecture.md) traces the code paths and their boundaries.
 
-## Shared admission · Issue [#1][issue-1]
+## Demo admission · Issue [#1][issue-1]
 
 Two logical workers acquire permits from one in-memory semaphore. A caller can time out or cancel its own future while the worker retains the permit until the downstream reaches a confirmed terminal state. A full pool returns immediately so the caller can decide when to try again. The tests verify a peak of three operations across both workers and prove that a caller timeout leaves the occupied slot reserved. [Shared admission tests][admission-test]
 
@@ -24,11 +24,11 @@ The [snapshot integration tests][snapshot-test] resume in a fresh JVM after the 
 
 Regional validation must confirm that the real engagement source can reopen the pinned snapshot after a process restart and that its retention period covers the expected publication recovery window. [Regional validation][issue-20]
 
-## Downstream reconciliation · Issue [#3][issue-3]
+## Demo reconciliation · Issue [#3][issue-3]
 
 The retrying client carries the same operation ID through every submission and status lookup. After a lost reply, confirmed success completes the original execution. A new submission requires confirmation that the previous one had no effect and can no longer run. The client returns a typed failure after a permanent rejection or when the last allowed submission is confirmed to have no effect. [Retry and reconciliation tests][retry-test]
 
-The three-submission budget applies to one worker execution and is held in memory. The worker retains its permit during backoff and unresolved reconciliation, which can reduce throughput when status is unavailable. A live downstream adapter must enforce idempotency and supply authoritative status. The current tests use a controlled transport that can record an effect, lose the reply, and confirm that only one effect occurred.
+The demo's three-submission budget applies to one worker execution and is held in memory. The worker retains its permit during backoff and unresolved reconciliation, which can reduce throughput when status is unavailable. A live downstream adapter must enforce idempotency and supply authoritative status. The current tests use a controlled transport that can record an effect, lose the reply, and confirm that only one effect occurred.
 
 ## Executable demo · Issue [#4][issue-4]
 
@@ -40,28 +40,29 @@ The simulator holds submissions under test control so the demo can measure overl
 
 Issues [#15](https://github.com/luisfm44/caseware-template-fanout-worker/issues/15), [#16](https://github.com/luisfm44/caseware-template-fanout-worker/issues/16) and [#17](https://github.com/luisfm44/caseware-template-fanout-worker/issues/17).
 
-- The `postgres-worker` profile processes one attempt at a time per JVM. It reclaims due attempts using `FOR UPDATE SKIP LOCKED`. The claim expires independently of downstream capacity. Each write checks the current claim token. A new claimant reconciles a recorded attempt before it can send again.
-- A PostgreSQL capacity row serializes admissions for the schema. The transaction that claims fresh work also reserves the slot, records a new attempt ID and increments the durable submission count. This counts authorizations even when the process dies before sending. Three authorizations are allowed per job. Status queries have their own bounded backoff.
-- An attempt reserves a slot until the downstream confirms success, rejection or definitive no effect. One SQL update records the confirmed result and clears the reservation. A confirmed no-effect outcome releases the slot and schedules a new attempt if budget remains.
+- The [durable runner][durable-runner] starts one polling loop per JVM. The planner initializes the schema and writes ready jobs. Each replica uses the same schema, capacity and downstream origin.
+- The [PostgreSQL queue][queue] reclaims due attempts using `FOR UPDATE SKIP LOCKED`. Defer and settlement require a matching claim token and an unexpired lease. A process can reclaim an attempt after the previous lease expires while the reservation is still active. The new claimant reconciles the recorded attempt before another submission is authorized.
+- The `fanout_capacity` row serializes fresh admissions for the schema. The transaction that claims fresh work also reserves the slot, records a new attempt ID and increments the durable submission count. This counts authorizations even when the process dies before sending. Three authorizations are allowed per job. Status queries have their own bounded backoff.
+- An attempt reserves a slot until the downstream confirms success, rejection or definitive no effect. One SQL update checks the attempt ID, records the confirmed result and clears the reservation. A confirmed no-effect outcome releases the slot and schedules a new attempt if budget remains.
 - Track unresolved work from `fanout_job.authorized_at`. An alert can use `SELECT max(clock_timestamp() - authorized_at) FROM fanout_job WHERE attempt_id IS NOT NULL`. The elapsed time measures uncertainty and does not determine when a slot is safe to release.
 
-The HTTP adapter uses `POST /submit` and `POST /resolve` at the configured downstream origin. Both carry URL-encoded form fields `firmId`, `engagementId`, `publicationId`, `engagementRevision` and `attemptId`. A successful HTTP response has a plain-text outcome of `APPLIED`, `REJECTED`, `NOT_APPLIED` or `PENDING`, with optional `Retry-After` in seconds. Errors and unusable responses leave the outcome uncertain. The engagement manager owns durable idempotency by operation ID and validates the expected revision. A `NOT_APPLIED` response certifies that the attempt had no effect and is fenced against late execution. An absent record alone provides insufficient evidence.
+The HTTP adapter uses `POST /submit` and `POST /resolve` at the configured downstream origin. Both carry URL-encoded form fields `firmId`, `engagementId`, `publicationId`, `engagementRevision` and `attemptId`. A successful HTTP response has a plain-text outcome of `APPLIED`, `REJECTED`, `NOT_APPLIED` or `PENDING`, with optional `Retry-After` in seconds. Errors and unusable responses leave the outcome uncertain. The engagement manager owns durable idempotency by operation ID and validates the expected revision. A `NOT_APPLIED` response certifies that the attempt had no effect and is fenced against late execution. The status contract requires fencing even if the manager has yet to see the original submission.
 
-The [process integration test](../src/test/java/io/github/luisfm44/caseware/worker/bootstrap/DurableWorkerProcessIT.java) uses a shared HTTP test downstream. The regional deployment needs a compatible engagement manager to enforce these guarantees and own the real capacity pool. [Regional architecture](system-architecture.md)
+The [process integration test][process-test] starts independent JVMs with a common PostgreSQL schema and controlled HTTP downstream. It verifies lease recovery across process loss, slot retention through status unavailability, a single effect per operation, fencing of a delayed request and rejection of a stale engagement revision. [Process test command and expected outcomes](worker-architecture.md#verification) · [Verified CI reports](evidence/README.md)
 
 ## Scheduling across firms
 
-Issue [#18](https://github.com/luisfm44/caseware-template-fanout-worker/issues/18). Each new reservation advances a shared cursor to the admitted firm in the PostgreSQL capacity row. With a slot available, the scheduler selects the next firm with eligible work in firm ID order, wrapping to the beginning as needed. It selects the oldest eligible job within that firm across its publications. Selection, reservation and cursor advancement commit together. This prevents a worker from claiming a fresh large-firm job ahead of capacity and then bypassing the next firm's turn.
+Issue [#18](https://github.com/luisfm44/caseware-template-fanout-worker/issues/18). Each new reservation advances a shared cursor to the admitted firm in the PostgreSQL capacity row. With a slot available, the scheduler selects the next firm with eligible work in firm ID order, wrapping to the beginning as needed. Within that firm it orders ready jobs across publications by eligibility time and breaks ties by publication, engagement and revision. Selection, reservation and cursor advancement commit together. This prevents a worker from claiming a fresh large-firm job ahead of capacity and then bypassing the next firm's turn.
 
 With a fixed set of continuously eligible firms, each receives a reservation within one rotation. Two eligible firms alternate when both have ready work. A sole eligible firm can use all available capacity. Deferred retries participate when they become due. Reconciliation keeps the existing reservation and leaves the cursor in place. The guarantee is expressed in new reservations when slots become available. Independent HTTP calls can reach the downstream in a different order when several slots open together.
 
-The [two-JVM integration test](../src/test/java/io/github/luisfm44/caseware/worker/bootstrap/DurableWorkerProcessIT.java) fills a two-slot pool with large-firm work, adds a small firm and releases one slot. It checks that the next downstream start belongs to the small firm with 30 large-firm jobs still ready. It then verifies that the large firm resumes and that the measured peak stays at two. Apply the worker version to all replicas sharing the schema before relying on the rotation across the pool.
+The [two-JVM integration test][process-test] fills a two-slot pool with large-firm work, adds a small firm and releases one slot. It checks that the next downstream start belongs to the small firm with 30 large-firm jobs still ready. It then verifies that the large firm resumes and that the measured peak stays at two. Apply the worker version to all replicas sharing the schema before relying on the rotation across the pool.
 
 ## Regional delivery boundary
 
 Issue [#20][issue-20]. The exercise uses the PostgreSQL job table as its dispatch queue. The proposed regional deployment uses SQS Standard for delivery and a regional PostgreSQL ledger for claims, authorized attempts and terminal results. The engagement manager provides the hard limit and owns the effect ledger. A worker restart or redelivery therefore resumes the same operation and reconciles any uncertain attempt. The regional worker acknowledges only after recording a terminal result.
 
-The local tests exercise these contracts with a controlled downstream and source. The regional release criteria require a real manager, source and SQS test queue. Fair Queues addresses delivery delay under uneven load. The strict turn order demonstrated by the exercise's PostgreSQL scheduler applies to the exercise. Version selection and summary validation belong to their owning services.
+The PostgreSQL worker tests use a controlled downstream and engagement source. Regional release criteria require a real manager, source and SQS test queue. The proposed SQS Fair Queues configuration uses the firm ID to reduce dwell time for quieter firms. The implemented PostgreSQL scheduler advances a firm cursor on each new reservation. Version selection and summary validation belong to their owning services.
 
 [Regional deployment design](system-architecture.md#dispatch-by-environment) · [Regional verification plan](regional-verification.md) · [Owner-side acceptance tests](owner-acceptance.md)
 
@@ -89,3 +90,6 @@ When an issue changes a contract, component boundary, or verification step, upda
 [planning-test]: ../src/test/java/io/github/luisfm44/caseware/worker/planning/PublicationFanoutIT.java
 [snapshot-test]: ../src/test/java/io/github/luisfm44/caseware/worker/planning/PublicationSnapshotIT.java
 [retry-test]: ../src/test/java/io/github/luisfm44/caseware/worker/execution/retry/RetryingDownstreamClientTest.java
+[durable-runner]: ../src/main/java/io/github/luisfm44/caseware/worker/bootstrap/DurableWorkerRunner.java
+[queue]: ../src/main/java/io/github/luisfm44/caseware/worker/adapter/postgres/PostgresJobQueue.java
+[process-test]: ../src/test/java/io/github/luisfm44/caseware/worker/bootstrap/DurableWorkerProcessIT.java

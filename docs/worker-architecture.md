@@ -1,6 +1,8 @@
 # Worker architecture
 
-The Java 25 application runs the sample with Spring Boot 4.1.2 and the `demo` profile. `DemoRunner` connects publication planning in PostgreSQL to two logical workers that share three downstream slots in one JVM.
+The Java 25 and Spring Boot 4.1.2 application plans publications into PostgreSQL. Independent JVMs running the `postgres-worker` profile consume jobs from the same schema and coordinate downstream capacity through PostgreSQL. The `demo` profile exercises planning and downstream recovery with two logical workers in a single JVM.
+
+## Durable PostgreSQL runtime
 
 ```mermaid
 ---
@@ -16,43 +18,38 @@ config:
       bottom: 18
 ---
 flowchart TB
-    accTitle: Java worker demo
-    accDescr: Spring Boot launches DemoRunner. PublicationFanout commits jobs and a checkpoint in PostgreSQL. DemoRunner reads the stored IDs and supplies them to two workers with three shared permits. The retry client submits or reconciles each ID through a simulator. DemoRunner writes the final report.
+    accTitle: Durable PostgreSQL worker
+    accDescr: PublicationFanout commits planned jobs and a pinned snapshot checkpoint to a shared PostgreSQL schema. Two independent JVMs claim work through the same capacity pool and firm cursor. Each uses the HTTP adapter to submit or resolve an attempt using the same operation and attempt IDs.
 
-    RUNNER["DemoRunner<br/>Java 25 · Spring Boot 4.1.2"]
-    REPORT["fanout-demo.json"]
+    PLANNER["PublicationFanout<br/>Read a bounded page from a pinned snapshot"]
+    DB[("Shared PostgreSQL schema<br/>Jobs, checkpoints, leases, capacity and firm cursor")]
 
-    subgraph PLAN["Plan and resume"]
+    subgraph WORKERS["Independent JVMs · postgres-worker"]
         direction LR
-        PLANNER["PublicationFanout<br/>Seven jobs across four pages"]
-        DB[("PostgreSQL<br/>Jobs and checkpoint")]
-        PLANNER -->|"Commit each page"| DB
+        FIRST["Worker JVM A<br/>DurableWorker and HTTP adapter"]
+        SECOND["Worker JVM B<br/>DurableWorker and HTTP adapter"]
+        FIRST ~~~ SECOND
     end
 
-    subgraph EXEC["Execute persisted jobs"]
-        direction TB
-        WORKERS["FanoutWorker A and B"]
-        ADMIT["Shared admission<br/>Three permits in one JVM"]
-        CLIENT["RetryingDownstreamClient"]
-        TRANSPORT["SimulatedDownstream<br/>Effects tracked by ID"]
-        WORKERS -->|"Reserve and release"| ADMIT
-        WORKERS -->|"Dispatch"| CLIENT
-        CLIENT -->|"Submit or reconcile"| TRANSPORT
-    end
+    DOWNSTREAM["Downstream HTTP contract<br/>OperationId and attemptId"]
 
-    RUNNER --> PLAN
-    PLAN -->|"DemoRunner reads stored OperationIds"| EXEC
-    EXEC -->|"DemoRunner writes results"| REPORT
+    PLANNER -->|"Commit jobs and checkpoint together"| DB
+    DB <-->|"Claim, defer or settle"| WORKERS
+    WORKERS <-->|"Submit or resolve"| DOWNSTREAM
 
-    classDef app fill:#f6f8fa,stroke:#8c959f,color:#24292f
+    classDef dependency fill:#f6f8fa,stroke:#8c959f,color:#24292f
     classDef planning fill:#e6ffec,stroke:#2da44e,color:#24292f
     classDef execution fill:#ddf4ff,stroke:#218bff,color:#24292f
-    class RUNNER,REPORT app
+    class DOWNSTREAM dependency
     class PLANNER,DB planning
-    class WORKERS,ADMIT,CLIENT,TRANSPORT execution
+    class FIRST,SECOND execution
 ```
 
-The demo consumes its own stored job IDs in a disposable schema. The separate `postgres-worker` profile claims planned jobs and coordinates slots across JVMs in PostgreSQL. Each fresh claim reserves a slot and advances the shared firm rotation in the same transaction. It reconciles uncertain attempts against an HTTP downstream. The process integration test exercises the protocol with a controlled server. Regional integration requires an engagement manager that supplies authoritative status and enforces idempotency and the real pool limit. [Proposed regional architecture](system-architecture.md) · [Worker design decisions](worker-design.md)
+1. [`DurableWorkerRunner`][durable-runner] starts the polling loop. All replicas in a pool share a PostgreSQL schema, capacity and downstream origin. The planner initializes the schema and inserts the jobs before workers consume them.
+2. [`PostgresJobQueue`][queue] first reclaims eligible attempts whose claims expired or were deferred. For new work it locks the pool row, checks for an available slot, selects the next eligible firm, leases a job and records an authorized attempt. The reservation and firm cursor advance in the same transaction.
+3. [`DurableWorker`][durable-worker] submits a new attempt through [`HttpAttemptTransport`][http-transport]. A reclaimed attempt goes to the status endpoint with its original operation and attempt IDs. A pending or uncertain response defers the next lookup while preserving the reservation. A confirmed result settles the attempt and frees capacity.
+
+The claim lease controls which process may write the result. An expired claim can be taken over while the downstream operation still occupies its slot. The durable attempt budget counts authorizations, including a process exit before an HTTP call. The regional deployment depends on an engagement manager that validates the engagement revision and owns authoritative status, idempotency and the regional capacity limit. [Durable worker design](worker-design.md#durable-consumption-and-shared-capacity) · [Proposed regional architecture](system-architecture.md)
 
 ## Package structure
 
@@ -63,7 +60,7 @@ The demo consumes its own stored job IDs in a disposable schema. The separate `p
 | `planning` | Plans publications and defines the engagement source and fan-out store contracts. |
 | `execution.model`, `execution.admission` | Hold the operation identity and capacity reservation contracts. |
 | `execution.service`, `execution.port`, `execution.retry` | Orchestrate execution, define job queue and downstream contracts, and implement retries. |
-| `adapter.postgres`, `adapter.http`, `adapter.memory` | Implement those contracts with JDBC, HTTP and the in-memory semaphore. |
+| `adapter.postgres`, `adapter.http`, `adapter.memory` | Implement JDBC planning and claims, the downstream HTTP adapter and the demo semaphore. |
 | `bootstrap`, `demo` | Wire the `postgres-worker` profile and run the self-contained `demo` profile. |
 
 `OperationId` is an immutable value object shared by planning and execution. The HTTP adapter maps its fields to the wire format. `Permit` represents a slot with an explicit release lifecycle.
@@ -80,14 +77,16 @@ The demo consumes its own stored job IDs in a disposable schema. The separate `p
 | [`FakeDownstreamClient`][fake] | Test implementation that keeps operations active until the test finishes them explicitly. It records both the current and peak number of active operations. |
 | [`SharedAdmissionTest`][test] | Creates two workers with the same dependencies, makes them compete for the last slot and verifies that the peak is three. It also verifies slot retention after a caller timeout. |
 | [`PublicationFanout`][planner] and [`EngagementSource`][source] | Read bounded, stable pages of eligible engagements and produce job IDs. |
-| [`PostgresFanoutStore`][store] | Persists each page's jobs and checkpoint in one transaction. |
+| [`PostgresFanoutStore`][store] | Persists each page's jobs and snapshot checkpoint in one transaction. |
+| [`PostgresJobQueue`][queue] and [`JobQueue`][job-port] | Claim due attempts and reserve schema-wide capacity for fresh jobs in firm rotation. The queue checks the current lease on defer and settlement. |
+| [`HttpAttemptTransport`][http-transport] and [`AttemptTransport`][attempt-port] | Submit and resolve authorized attempts over HTTP using the stable operation ID and attempt ID. |
 | [`RetryingDownstreamClient`][retry] and [`DownstreamTransport`][transport] | Apply the retry policy and submit or reconcile a downstream operation by ID. |
 | [`TemplateFanoutWorkerApplication`][boot] | Starts Spring Boot 4.1.2 and discovers the runner for the selected profile. |
 | [`DurableWorkerRunner`][durable-runner] and [`DurableWorker`][durable-worker] | The runner wires the durable profile. The worker uses the job queue and downstream contracts to dispatch and reconcile attempts. |
 | [`DemoRunner`][demo] | Plans and reads the sample publication in PostgreSQL, runs two logical workers and writes the JSON report. |
 | [`SimulatedDownstream`][simulator] | Controls when replies arrive, records effects by operation ID and loses one reply after applying its effect. |
 
-## Operation lifecycle
+## Demo operation lifecycle
 
 1. A caller invokes `tryStart(operationId)`. If all slots are reserved, the worker returns `Optional.empty()` without dispatching anything. The caller can retry with the same ID.
 2. If admitted, the worker calls `DownstreamClient.start` and registers `Permit.close()` on the terminal stage. A synchronous dispatch failure also closes the permit because the downstream contract guarantees that this call started no work.
@@ -96,7 +95,7 @@ The demo consumes its own stored job IDs in a disposable schema. The separate `p
 
 The timeout test starts three operations, times out the caller's future for one of them and checks that both workers are denied a fourth start. Once the fake finishes the original operation, the fourth can start and the peak stays at three.
 
-The semaphore shares capacity within a single JVM. A deployment with separate worker processes needs a shared admission authority. A real downstream client must reconcile an ambiguous transport timeout by operation ID before reporting a terminal outcome. See the [system architecture](architecture.pdf) for the broader design.
+The demo semaphore shares capacity within a single JVM. The durable profile uses the PostgreSQL pool described above.
 
 ## Durable publication planning
 
@@ -110,7 +109,7 @@ The semaphore shares capacity within a single JVM. A deployment with separate wo
 
 If two planners read different initial snapshots, the first successful commit pins the snapshot. The other planner reloads the committed checkpoint and uses its snapshot and cursor on the next request. A fresh process resumes the same way after an interruption. An unavailable snapshot or a response for a different snapshot stops planning before the next commit. Replaying a completed publication returns immediately. [Snapshot contract and legacy checkpoints](worker-design.md#engagement-snapshots)
 
-## Downstream retries and reconciliation
+## Demo retries and reconciliation
 
 [`RetryingDownstreamClient`][retry] implements `DownstreamClient` and uses the same `OperationId` for every submission and lookup. `FanoutWorker` keeps the permit reserved across dispatch, backoff and reconciliation until the terminal stage completes.
 
@@ -168,13 +167,64 @@ The status lookup completes the original operation. If the lookup cannot confirm
 
 ## Verification
 
+Run the process suite with JDK 25 and PostgreSQL started as described in [Run locally](../README.md#postgresql-integration-tests-and-executable-demo).
+
+```sh
+./mvnw -Ppostgres-integration -Dit.test=DurableWorkerProcessIT verify
+```
+
+[`DurableWorkerProcessIT`][process-test] launches independent `postgres-worker` JVMs with distinct PIDs in the cross-process scenarios. They share a disposable PostgreSQL schema and a controlled loopback HTTP server. The server records submissions, resolutions, effects and peak active operations. The suite also queries the persisted job state.
+
+| Scenario | Observed outcome |
+| --- | --- |
+| Process exit with an uncertain attempt | A second JVM reclaims the original attempt. The first JVM is forcibly stopped. During the status outage, the existing attempt remains reserved and the next job waits. When status becomes available, both jobs finish with one effect each and a peak of one active operation. |
+| Fenced delayed request | The downstream confirms no effect and fences the old attempt. It rejects the delayed request when delivered. The surviving JVM retries with a different attempt ID under the same operation ID. The final effect count is one per operation. |
+| Stale engagement revision | The controlled downstream rejects the stale operation without an effect. The worker records the terminal rejection. |
+| Small firm joins a large backlog | Two JVMs fill a pool of two. The small firm receives the next free slot while 30 large-firm jobs remain ready. The large firm resumes after that turn and the measured peak stays at two. |
+
+### Process loss test sequence
+
+```mermaid
+---
+config:
+  theme: neutral
+  sequence:
+    mirrorActors: false
+---
+sequenceDiagram
+    participant T as Test harness
+    participant A as Worker JVM A
+    participant B as Worker JVM B
+    participant P as Shared PostgreSQL
+    participant H as Controlled HTTP downstream
+
+    T->>P: Seed two ready jobs and set limit to one
+    A->>P: Claim job 1 and reserve the only slot
+    A->>H: Submit original attempt
+    Note over A,H: Hold the reply
+    B->>P: Reclaim the expired lease
+    B->>H: Resolve the same attempt
+    T->>H: Make status unavailable
+    T->>A: Forcibly stop the process
+    T->>H: Apply job 1 and drop the reply
+    B->>H: Retry status lookup
+    Note over B,P: Job 1 stays submitted and job 2 waits
+    T->>H: Restore authoritative status
+    B->>H: Resolve job 1 as applied
+    B->>P: Settle job 1 and claim job 2
+    B->>H: Submit job 2
+    B->>P: Record job 2 as applied
+    Note over B,H: Both jobs applied, one effect each, peak of one
+```
+
 - [`SharedAdmissionTest`][test] measures the downstream concurrency peak and verifies permit retention after a caller timeout.
 - [`PublicationFanoutIT`][planning-test] runs against PostgreSQL and checks resume, replay, rollback and stale checkpoints.
+- [`PublicationSnapshotIT`][snapshot-test] checks that a fresh JVM resumes the same source snapshot after the live source changes. It also checks that an unavailable or mismatched snapshot leaves the checkpoint and committed jobs intact.
 - [`RetryingDownstreamClientTest`][retry-test] checks the single-effect recovery, bounded retries and rejection paths with controlled responses.
 - The [manual demo workflow](../.github/workflows/demo.yml) builds and runs the packaged JAR against PostgreSQL, checks the report and uploads it as a workflow artifact.
 - The [SonarQube quality job](code-quality.md) verifies zero missed JaCoCo lines and branches, imports the combined unit and PostgreSQL coverage, and enforces the 100% overall gate. GitHub Actions publishes both reports on pushes to `main` and on manual runs.
 
-See the [worker design decisions](worker-design.md) for the rationale and how the current implementation maps to the system proposal.
+[Verified CI runs and reports](evidence/README.md) · [Worker design decisions](worker-design.md)
 
 [operation]: ../src/main/java/io/github/luisfm44/caseware/worker/execution/model/OperationId.java
 [worker]: ../src/main/java/io/github/luisfm44/caseware/worker/execution/service/FanoutWorker.java
@@ -197,3 +247,9 @@ See the [worker design decisions](worker-design.md) for the rationale and how th
 [durable-worker]: ../src/main/java/io/github/luisfm44/caseware/worker/execution/service/DurableWorker.java
 [demo]: ../src/main/java/io/github/luisfm44/caseware/worker/demo/DemoRunner.java
 [simulator]: ../src/main/java/io/github/luisfm44/caseware/worker/demo/SimulatedDownstream.java
+[queue]: ../src/main/java/io/github/luisfm44/caseware/worker/adapter/postgres/PostgresJobQueue.java
+[job-port]: ../src/main/java/io/github/luisfm44/caseware/worker/execution/port/JobQueue.java
+[http-transport]: ../src/main/java/io/github/luisfm44/caseware/worker/adapter/http/HttpAttemptTransport.java
+[attempt-port]: ../src/main/java/io/github/luisfm44/caseware/worker/execution/port/AttemptTransport.java
+[snapshot-test]: ../src/test/java/io/github/luisfm44/caseware/worker/planning/PublicationSnapshotIT.java
+[process-test]: ../src/test/java/io/github/luisfm44/caseware/worker/bootstrap/DurableWorkerProcessIT.java
