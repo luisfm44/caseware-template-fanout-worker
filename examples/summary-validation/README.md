@@ -1,6 +1,6 @@
 # Summary validation mockup
 
-This reference API exercises the promotion rules from [issue #27](https://github.com/luisfm44/caseware-template-fanout-worker/issues/27). The tests send real HTTP requests to a Spring Boot server on a dynamic port at `127.0.0.1`. They use synthetic template revisions and scripted grouping responses. The application verifies artifact hashes, compares the approved baseline and target, renders localized sentences, and records which summary version a receipt points to. Each test run uses an in-memory archive and requires zero cloud services, model calls, or credentials.
+This reference API exercises the promotion rules from [issue #27](https://github.com/luisfm44/caseware-template-fanout-worker/issues/27). The tests send real HTTP requests to a Spring Boot server on a dynamic port at `127.0.0.1`. They use synthetic template revisions and scripted grouping responses. The application verifies artifact hashes, compares the approved baseline and target, renders localized sentences, and records which summary version a receipt points to. Each mock instance uses an in-memory archive. Summary versions and receipts use distinct UUID-based identifiers. A replacement mock returns HTTP 404 for an earlier identifier even after archiving a new comparison. The tests require zero cloud services, model calls, or credentials.
 
 ## Run the tests locally
 

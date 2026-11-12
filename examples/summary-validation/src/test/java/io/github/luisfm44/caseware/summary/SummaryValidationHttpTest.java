@@ -30,9 +30,11 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.builder.SpringApplicationBuilder;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.boot.web.server.context.WebServerApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.test.annotation.DirtiesContext;
 
@@ -239,6 +241,39 @@ class SummaryValidationHttpTest {
         assertVerifiedArtifact(receipt, "$.artifact", FR);
     }
 
+    @Test
+    void rejectsEarlierIdentifiersInAReplacementMock() throws Exception {
+        grouping.use(COMPLETE);
+        var original = summary(FR, 200);
+        var originalVersion = string(original, "$.artifact.version");
+        var originalView = post("/summaries/" + originalVersion + "/views", null, "", 201);
+        var originalReceipt = string(originalView, "$.receiptId");
+        assertThat(string(originalView, "$.artifact.targetHash")).isEqualTo(sha256(bytes(TARGET)));
+
+        fixture("Start a fresh mock with its own empty archive and generate the v4 to v8 comparison.");
+        try (var replacement = new SpringApplicationBuilder(
+                SummaryMockApplication.class, Fixtures.class)
+                .run("--server.port=0", "--server.address=127.0.0.1")) {
+            var replacementCatalog = replacement.getBean(FixtureCatalog.class);
+            replacementCatalog.approve(V4, BASE);
+            replacementCatalog.approve(V8, LATER_TARGET);
+            replacement.getBean(FixtureGrouping.class).use(MISSING);
+            int replacementPort = ((WebServerApplicationContext) replacement).getWebServer().getPort();
+            var newer = request(replacementPort, "POST", "/summaries", """
+                    {"baselineRevision":"v4","targetRevision":"v8","locale":"fr-CA"}
+                    """, V8, 200);
+            var newerVersion = string(newer, "$.artifact.version");
+            var newerView = request(replacementPort, "POST", "/summaries/" + newerVersion + "/views", null, "", 201);
+            var newerReceipt = string(newerView, "$.receiptId");
+
+            request(replacementPort, "GET", "/views/" + originalReceipt, null, "", 404);
+            request(replacementPort, "POST", "/summaries/" + originalVersion + "/views", null, "", 404);
+            var receipt = request(replacementPort, "GET", "/views/" + newerReceipt, null, "", 200);
+            assertThat(string(receipt, "$.artifact.targetHash")).isEqualTo(sha256(bytes(LATER_TARGET)));
+            assertThat(receipt.read("$.artifact", Object.class)).isEqualTo(newer.read("$.artifact", Object.class));
+        }
+    }
+
     private static void assertVerifiedArtifact(ReadContext result, String path, String locale) {
         assertThat(string(result, path + ".version")).isNotBlank();
         assertThat(string(result, path + ".baselineHash")).isEqualTo(sha256(bytes(BASE)));
@@ -271,7 +306,12 @@ class SummaryValidationHttpTest {
 
     private ReadContext request(String method, String path, String body, String target, int status)
             throws IOException, InterruptedException {
-        var builder = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + port + path))
+        return request(port, method, path, body, target, status);
+    }
+
+    private ReadContext request(int serverPort, String method, String path, String body, String target, int status)
+            throws IOException, InterruptedException {
+        var builder = HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + serverPort + path))
                 .timeout(Duration.ofSeconds(5));
         if (body != null) {
             builder.header("Content-Type", "application/json");
