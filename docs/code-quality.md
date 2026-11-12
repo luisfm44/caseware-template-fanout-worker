@@ -1,10 +1,10 @@
 # SonarQube code quality
 
-The `quality` job runs on pushes to `main` and on manual dispatch. For a worker Java change, manually run **Verify and scan** on the pull request branch with `prove_gate_failure` unchecked and confirm the run uses the commit under review. Community Build analyzes one main branch per project, so a feature-branch run uses its checkout as the main branch of an isolated, temporary project. [Verify and scan workflow](../.github/workflows/ci.yml) · [Pipeline triggers and jobs](pipelines.md)
+The `quality` job runs on pull requests targeting `main`, pushes to `main` and manual dispatch. The required `verify` check depends on this result. Pull request jobs use the checked-out merge candidate and a disposable Community Build project without credentials for a shared SonarQube server. [Verify and scan workflow](../.github/workflows/ci.yml) · [Pipeline triggers and jobs](pipelines.md)
 
 ## Coverage and Quality Gate
 
-The root Maven project's `coverage` profile uses JaCoCo 0.8.16 to collect execution data from Surefire and Failsafe. The `postgres-integration` profile adds PostgreSQL integration tests to the worker's unit suite. Use `clean verify` to collect execution data for the current build. SonarScanner for Maven 5.8.0.7211 imports the XML. The regional and summary reference APIs each have a separate Maven project and publish their HTTP results through their own workflows. [Worker Maven configuration](../pom.xml) · [Acceptance reports](evidence/README.md)
+The root Maven project's `coverage` profile uses JaCoCo 0.8.16 to collect execution data from Surefire and Failsafe. The `postgres-integration` profile adds PostgreSQL integration tests to the worker's unit suite. Use `clean verify` to collect execution data for the current build. SonarScanner for Maven 5.8.0.7211 imports the XML. The regional and summary reference APIs each have a separate Maven project. Their standalone and connected HTTP workflows publish their own results and contribute to the required check. [Worker Maven configuration](../pom.xml) · [Acceptance reports](evidence/README.md)
 
 The coverage build checks that JaCoCo reports zero missed production lines and branches. The default quality job starts SonarQube Community Build 26.11 on the runner, bound to loopback. It uses a disposable private project, a temporary project analysis token and a Quality Gate with a **100% minimum for overall coverage**. The runner removes the container and its data after the scan.
 

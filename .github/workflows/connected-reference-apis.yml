@@ -1,21 +1,6 @@
 name: Connected reference APIs
 
 on:
-  push:
-    paths:
-      - 'examples/**'
-      - '.github/workflows/connected-reference-apis.yml'
-      - '.mvn/wrapper/**'
-      - 'mvnw'
-      - 'mvnw.cmd'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'examples/**'
-      - '.github/workflows/connected-reference-apis.yml'
-      - '.mvn/wrapper/**'
-      - 'mvnw'
-      - 'mvnw.cmd'
   workflow_call:
   workflow_dispatch:
 
@@ -51,7 +36,7 @@ jobs:
 
       - name: Generate the scenario report
         id: report
-        if: ${{ !cancelled() && hashFiles(env.REPORT_XML) != '' }}
+        if: ${{ !cancelled() && (success() || hashFiles(env.REPORT_XML) != '') }}
         run: |
           python3 examples/regional-version-selection/tools/render_evidence.py \
             "$REPORT_XML" "$REPORT_DIR" \
