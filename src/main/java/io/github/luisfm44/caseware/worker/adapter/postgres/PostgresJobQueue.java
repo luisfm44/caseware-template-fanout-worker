@@ -7,6 +7,7 @@ import java.sql.SQLException;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import javax.sql.DataSource;
 
@@ -18,6 +19,9 @@ import io.github.luisfm44.caseware.worker.execution.port.JobQueue;
 public final class PostgresJobQueue implements JobQueue {
 
     private static final int MAX_SUBMISSIONS = 3;
+    // Connection loss, unknown transaction outcome, shutdown or database startup.
+    private static final Set<String> RECONNECTABLE_STATES =
+            Set.of("08001", "08003", "08006", "08007", "57P01", "57P02", "57P03");
     private static final String MATCHING_CLAIM = """
             WHERE firm_id = ? AND publication_id = ? AND engagement_id = ? AND engagement_revision = ?
               AND claim_token = ?
@@ -283,6 +287,9 @@ public final class PostgresJobQueue implements JobQueue {
         try (var connection = dataSource.getConnection()) {
             return operation.run(connection);
         } catch (SQLException failure) {
+            if (RECONNECTABLE_STATES.contains(Objects.toString(failure.getSQLState(), ""))) {
+                throw new JobQueue.Unavailable(failure);
+            }
             throw new IllegalStateException("Could not access the durable job queue", failure);
         }
     }

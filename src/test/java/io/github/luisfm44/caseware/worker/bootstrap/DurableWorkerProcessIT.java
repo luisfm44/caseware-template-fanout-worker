@@ -19,8 +19,12 @@ import org.postgresql.ds.PGSimpleDataSource;
 
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
+import java.net.ConnectException;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
+import java.net.Socket;
 import java.net.URLDecoder;
+import java.net.URLEncoder;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.SQLException;
@@ -37,6 +41,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.IntStream;
+import javax.net.SocketFactory;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -212,6 +217,39 @@ class DurableWorkerProcessIT {
     }
 
     @Test
+    void resumesAfterPostgresDisconnectsBetweenEffectAndSettlement() throws Exception {
+        var disconnected = logs.resolve("postgres-disconnected");
+        workerUrl += "&socketFactory=" + DisconnectableSocketFactory.class.getName()
+                + "&socketFactoryArg=" + URLEncoder.encode(disconnected.toString(), UTF_8);
+
+        try (var manager = new RecordingManager(FirstRequest.HOLD_ALL_REPLIES);
+                var worker = startWorker(manager.url(), "worker")) {
+            eventually(worker, () -> assertThat(manager.active()).isEqualTo(1));
+            var original = manager.submissions().getFirst();
+            assertThat(original.operation()).isEqualTo(FIRST);
+            manager.recordEffect(original);
+            Files.createFile(disconnected);
+            manager.releaseSubmissionReply(original);
+
+            eventually(worker, () -> assertThat(Files.readString(worker.log()))
+                    .contains("Durable job queue unavailable; will resume from persisted state",
+                            "PostgresJobQueue.settle", "Test PostgreSQL link is disconnected"));
+            assertThat(worker.process().isAlive()).isTrue();
+            assertThat(executions(database)).containsExactlyInAnyOrderEntriesOf(
+                    Map.of(FIRST.engagementId(), new Execution("SUBMITTED", 1, original.id()),
+                            NEXT.engagementId(), new Execution("READY", 0, null)));
+            assertThat(manager.effects()).containsExactlyEntriesOf(Map.of(FIRST, 1));
+            assertThat(manager.submissions()).containsExactly(original);
+
+            Files.delete(disconnected);
+            completeNextAndVerify(worker, manager);
+
+            assertThat(worker.process().isAlive()).isTrue();
+            assertThat(manager.resolutions()).isNotEmpty().allMatch(original::equals);
+        }
+    }
+
+    @Test
     void aLateSmallFirmStartsAtTheNextFreeSlotWhileTheLargeFirmIsBacklogged() throws Exception {
         var moreLargeJobs = IntStream.range(0, 30)
                 .mapToObj(index -> new Engagement("large-engagement-" + index, "revision-1"))
@@ -369,6 +407,44 @@ class DurableWorkerProcessIT {
                     kill();
                 }
             }
+        }
+    }
+
+    /** Cuts only the worker's JDBC link. The test observes PostgreSQL over a separate connection. */
+    public static final class DisconnectableSocketFactory extends SocketFactory {
+
+        private final Path disconnected;
+
+        public DisconnectableSocketFactory(String marker) {
+            disconnected = Path.of(marker);
+        }
+
+        @Override
+        public Socket createSocket() throws IOException {
+            if (Files.exists(disconnected)) {
+                throw new ConnectException("Test PostgreSQL link is disconnected");
+            }
+            return new Socket();
+        }
+
+        @Override
+        public Socket createSocket(String host, int port) {
+            throw new UnsupportedOperationException("The JDBC driver opens an unconnected socket");
+        }
+
+        @Override
+        public Socket createSocket(String host, int port, InetAddress localAddress, int localPort) {
+            throw new UnsupportedOperationException("The JDBC driver opens an unconnected socket");
+        }
+
+        @Override
+        public Socket createSocket(InetAddress host, int port) {
+            throw new UnsupportedOperationException("The JDBC driver opens an unconnected socket");
+        }
+
+        @Override
+        public Socket createSocket(InetAddress host, int port, InetAddress localAddress, int localPort) {
+            throw new UnsupportedOperationException("The JDBC driver opens an unconnected socket");
         }
     }
 
@@ -542,6 +618,15 @@ class DurableWorkerProcessIT {
         synchronized void completeAndReply(Attempt attempt) {
             assertThat(active).contains(attempt);
             apply(attempt);
+            heldReplies.get(attempt).countDown();
+        }
+
+        synchronized void recordEffect(Attempt attempt) {
+            assertThat(active).contains(attempt);
+            apply(attempt);
+        }
+
+        synchronized void releaseSubmissionReply(Attempt attempt) {
             heldReplies.get(attempt).countDown();
         }
 
