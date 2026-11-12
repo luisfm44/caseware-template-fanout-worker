@@ -7,6 +7,7 @@ import io.github.luisfm44.caseware.worker.execution.port.AttemptTransport;
 import io.github.luisfm44.caseware.worker.execution.port.AttemptTransport.Outcome;
 import io.github.luisfm44.caseware.worker.execution.port.JobQueue;
 import io.github.luisfm44.caseware.worker.execution.port.JobQueue.Claim;
+import io.github.luisfm44.caseware.worker.execution.port.JobQueue.ClaimPreference;
 
 /** Consumes reserved attempts and reconciles uncertain downstream outcomes. */
 public final class DurableWorker {
@@ -25,13 +26,17 @@ public final class DurableWorker {
     }
 
     public void consume() {
+        var preference = ClaimPreference.RECONCILIATION;
         int queueFailures = 0;
         try {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
-                    var claim = jobs.claimReady();
+                    var claim = jobs.claimReady(preference);
                     if (claim.isPresent()) {
-                        process(claim.get());
+                        var current = claim.get();
+                        // Give both kinds of work a turn even when the other kind is continuously due.
+                        preference = current.reconciling() ? ClaimPreference.ADMISSION : ClaimPreference.RECONCILIATION;
+                        process(current);
                     } else {
                         Thread.sleep(idleDelay);
                     }

@@ -53,7 +53,7 @@ python3 examples/regional-version-selection/tools/render_evidence.py \
   --manifest examples/connected-reference-apis/report-scenarios.json
 ```
 
-Open `examples/connected-reference-apis/target/evidence/index.html`. **Verify and scan** calls the connected workflow and uploads the HTML and Surefire XML as `connected-reference-apis`. [Current report on main](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910556286) · [Standalone workflow](../../.github/workflows/connected-reference-apis.yml)
+Open `examples/connected-reference-apis/target/evidence/index.html`. **Verify and scan** calls the connected workflow and uploads the HTML and Surefire XML as `connected-reference-apis`. [Latest verified reports](https://github.com/luisfm44/caseware-template-fanout-worker/wiki/Test-Evidence) · [Standalone workflow](../../.github/workflows/connected-reference-apis.yml)
 
 ## Scope of the evidence
 

@@ -36,7 +36,7 @@ python3 examples/regional-version-selection/tools/render_evidence.py \
 
 Open `examples/regional-version-selection/target/evidence/index.html`. The report shows each test result, changes to the fixtures and the observed HTTP requests and responses. Run the reporting command after the suite finishes to inspect failures as well. The trace excludes synthetic credentials.
 
-**Verify and scan** runs the suite and publishes HTML and Surefire XML as `regional-version-selection-e2e`. Download the artifact and open `evidence/index.html`. The original #26 screenshots remain available as historical evidence. [Current report on main](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910591752) · [Original screenshots](../../docs/evidence/issue-26/README.md)
+**Verify and scan** runs the suite and publishes HTML and Surefire XML as `regional-version-selection-e2e`. Download the artifact and open `evidence/index.html`. The original #26 screenshots remain available as historical evidence. [Latest verified reports](https://github.com/luisfm44/caseware-template-fanout-worker/wiki/Test-Evidence) · [Original screenshots](../../docs/evidence/issue-26/README.md)
 
 ## HTTP outcomes covered by the suite
 

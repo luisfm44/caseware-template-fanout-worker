@@ -8,6 +8,7 @@ import io.github.luisfm44.caseware.worker.adapter.postgres.PostgresJobQueue;
 import org.junit.jupiter.api.Test;
 import org.springframework.mock.env.MockEnvironment;
 
+import static io.github.luisfm44.caseware.worker.execution.port.JobQueue.ClaimPreference.RECONCILIATION;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.Mockito.mockConstruction;
@@ -24,7 +25,7 @@ class DurableWorkerRunnerTest {
         try (var queues = mockConstruction(PostgresJobQueue.class, (queue, context) -> {
             assertThat(context.arguments()).hasSize(4);
             assertThat(context.arguments().subList(1, 4)).isEqualTo(List.of(2, Duration.ofSeconds(2), Duration.ofSeconds(3)));
-            when(queue.claimReady()).thenAnswer(ignored -> {
+            when(queue.claimReady(RECONCILIATION)).thenAnswer(ignored -> {
                 Thread.currentThread().interrupt();
                 return Optional.empty();
             });

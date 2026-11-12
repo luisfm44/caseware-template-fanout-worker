@@ -13,6 +13,7 @@ import io.github.luisfm44.caseware.worker.execution.port.JobQueue;
 import io.github.luisfm44.caseware.worker.execution.port.JobQueue.Claim;
 import org.junit.jupiter.api.Test;
 
+import static io.github.luisfm44.caseware.worker.execution.port.JobQueue.ClaimPreference.RECONCILIATION;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.doAnswer;
@@ -77,7 +78,7 @@ class DurableWorkerTest {
     @Test
     void waitsForWorkAndStopsWhenInterrupted() throws Exception {
         var claim = new Claim(OPERATION, CLAIM_TOKEN, ATTEMPT, 1, 0, true);
-        when(jobs.claimReady()).thenReturn(Optional.empty()).thenReturn(Optional.of(claim));
+        when(jobs.claimReady(RECONCILIATION)).thenReturn(Optional.empty()).thenReturn(Optional.of(claim));
         when(transport.resolve(OPERATION, ATTEMPT)).thenReturn(new Reply(Outcome.APPLIED, Duration.ZERO));
         doAnswer(ignored -> {
             Thread.currentThread().interrupt();
@@ -95,7 +96,7 @@ class DurableWorkerTest {
     @Test
     void retriesConsecutiveQueueDisconnectsAndStopsWhenInterruptedDuringTheWait() {
         var unavailable = new JobQueue.Unavailable(new IOException("disconnected"));
-        when(jobs.claimReady()).thenThrow(unavailable).thenThrow(unavailable).thenAnswer(ignored -> {
+        when(jobs.claimReady(RECONCILIATION)).thenThrow(unavailable).thenThrow(unavailable).thenAnswer(ignored -> {
             Thread.currentThread().interrupt();
             return Optional.empty();
         });
@@ -107,14 +108,14 @@ class DurableWorkerTest {
             Thread.interrupted();
         }
 
-        verify(jobs, times(3)).claimReady();
+        verify(jobs, times(3)).claimReady(RECONCILIATION);
         verifyNoInteractions(transport);
     }
 
     @Test
     void propagatesFatalQueueErrors() {
         var failure = new IllegalStateException("invalid schema");
-        when(jobs.claimReady()).thenThrow(failure);
+        when(jobs.claimReady(RECONCILIATION)).thenThrow(failure);
 
         assertThatThrownBy(worker::consume).isSameAs(failure);
         verifyNoInteractions(transport);
