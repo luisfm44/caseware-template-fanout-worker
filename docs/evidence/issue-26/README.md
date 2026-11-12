@@ -1,8 +1,8 @@
 # Regional mockup HTTP evidence · Issue #26
 
-The JDK 25 run passed all 13 scenarios with 35 HTTP requests and zero failures. Spring Boot served the requests locally and the suite asserted each response. The report uses the Surefire XML and the real HTTP trace collected by the test client.
+These screenshots record the local JDK 25 run included in PR #29. The suite passed 13 scenarios with 35 HTTP requests and zero failures. Spring Boot served the requests on loopback. The report renders Surefire XML and HTTP traces recorded by the test client. The companion GitHub Actions run verified the same suite on the PR branch. [PR #29](https://github.com/luisfm44/caseware-template-fanout-worker/pull/29) · [Original CI run](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43130872911)
 
-[Run the suite and regenerate the report](../../../examples/regional-version-selection/README.md) · [GitHub Actions reports](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/regional-version-selection.yml)
+[Current evidence index](../README.md) · [Run the suite and regenerate the report](../../../examples/regional-version-selection/README.md) · [Regional workflow history](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/regional-version-selection.yml)
 
 | Scenario | Observed outcome | Screenshot |
 | --- | --- | --- |
@@ -20,4 +20,4 @@ The JDK 25 run passed all 13 scenarios with 35 HTTP requests and zero failures. 
 | 12 · Stale target | The API returns `409` for application or decline of the old target and returns the new offer on the next read. | [Open](12-stale-target.png) |
 | 13 · Firm isolation | The API returns `401` without authentication and `404` for reads and applications on another firm's file. The owning firm receives `200`. | [Open](13-firm-isolation.png) |
 
-The evidence comes from the reference API with a controlled catalog and engagement manager. The owning regional API's CI evidence is tracked in [issue #26](https://github.com/luisfm44/caseware-template-fanout-worker/issues/26).
+The reference API used a controlled catalog and engagement manager. Issue #26 records the handoff criteria. Acceptance in the owning regional updates API still requires its own implementation and CI run. [Issue #26](https://github.com/luisfm44/caseware-template-fanout-worker/issues/26) · [Owner acceptance criteria](../../owner-acceptance.md#regional-updates-api)

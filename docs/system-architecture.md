@@ -1,6 +1,8 @@
-# Proposed regional system architecture
+# Regional system architecture
 
-The proposal distributes template releases once per product and market, then resolves each auditor's update offer from verified metadata in the firm's home region. The Java fan-out worker is the background verification component in this design. The [Java worker](worker-architecture.md) exercises its planning, admission and recovery contracts locally with PostgreSQL and a controlled downstream. The following regional deployment design is proposed in [issue #20](https://github.com/luisfm44/caseware-template-fanout-worker/issues/20).
+The proposed deployment publishes template releases per product and market. The regional updates API derives each auditor's offer from verified metadata in the firm's home region. The Java fan-out worker covers background verification for unknown or flagged baselines. Template publication, summary generation, offer decisions and authoritative engagement changes belong to their respective services. [Regional deployment design](https://github.com/luisfm44/caseware-template-fanout-worker/issues/20)
+
+The diagram shows the proposed service boundaries. This repository implements the Java worker and two standalone reference APIs. The [Java worker architecture](worker-architecture.md) describes the worker's PostgreSQL and HTTP integration. The [test evidence index](evidence/README.md) links the reference reports and identifies the evidence that still needs to come from the service owners.
 
 ```mermaid
 ---
@@ -17,28 +19,31 @@ config:
 ---
 flowchart TB
     accTitle: Proposed regional system architecture
-    accDescr: Shared template services publish release revisions to a regional catalog and replicate approved summaries to a regional evidence store. The regional updates API serves the auditor using authorized firm data. A regional exception planner enqueues SQS verification jobs for the Java worker, which submits and reconciles work through the engagement manager.
+    accDescr: The template service supplies approved artifact bytes and hashes to the summary service, which verifies and compares them before archiving localized summaries. The firm's updates API selects offers from regional release and engagement data and serves archived summaries with view receipts. A planner publishes verification jobs to regional SQS. The Java worker reconciles them through the engagement manager, which owns downstream admission and effects.
 
     subgraph SHARED["Shared template services"]
         direction LR
         RELEASE["Template service<br/>Release and outbox"]
-        SUMMARY["Summary service<br/>Compare and archive"]
+        SUMMARY["Summary service<br/>Verify hashes and compare versions"]
+        ARCHIVE[("Versioned summary archive<br/>Verified facts and localized text")]
+        RELEASE -->|"Approved artifact bytes and hashes"| SUMMARY
+        SUMMARY -->|"Promote validated summary"| ARCHIVE
     end
 
     subgraph REGION["Firm home region"]
         direction TB
         CATALOG["Regional catalog"]
         EVIDENCE[("Regional evidence store")]
-        API["Regional updates API"]
+        API["Regional updates API<br/>Select offer and summary pair"]
         AUDITOR["Auditor"]
         PLANNER["Exception planner"]
         QUEUE["Regional SQS"]
         WORKER["Java fan-out worker"]
-        MANAGER["Engagement manager"]
-        FIRM[("Firm database<br/>Index and receipts")]
+        MANAGER["Engagement manager<br/>Shared admission and effects"]
+        FIRM[("Firm database<br/>Index, decisions and view receipts")]
 
         CATALOG --> API
-        EVIDENCE --> API
+        EVIDENCE -->|"Archived summary and locale"| API
         AUDITOR -->|"List, inspect, decide"| API
         API -->|"Read index and save receipts"| FIRM
         CATALOG --> PLANNER
@@ -50,26 +55,43 @@ flowchart TB
     end
 
     RELEASE -->|"Relay release revision"| CATALOG
-    SUMMARY -->|"Replicate archive"| EVIDENCE
+    ARCHIVE -->|"Replicate promoted versions"| EVIDENCE
 
     classDef shared fill:#f6f8fa,stroke:#8c959f,color:#24292f
     classDef regional fill:#e6ffec,stroke:#2da44e,color:#24292f
     classDef background fill:#ddf4ff,stroke:#218bff,color:#24292f
-    class RELEASE,SUMMARY shared
+    class RELEASE,SUMMARY,ARCHIVE shared
     class CATALOG,EVIDENCE,API,AUDITOR,MANAGER,FIRM regional
     class PLANNER,QUEUE,WORKER background
 ```
 
-## Ownership and data flow
+## Service ownership in the proposed deployment
 
 | Area | Proposed responsibility |
 | --- | --- |
 | Template service and regional catalog | Commit the release and outbox revision in one transaction. Regional consumers ignore older revisions and fetch a catalog snapshot on gaps. |
-| Regional updates API | Derive firm and file access from the authenticated session. Use the active release, the verified effective version and prior decisions to determine which update to offer. Link each displayed summary to its archived text and a view receipt. |
-| Summary and evidence | Compare exact approved template versions. Archive reviewed summary text and replicate it to regional evidence stores. The shared summary service uses template facts. |
+| Regional updates API | Derive firm and file access from the authenticated session. Use the active release, the verified effective version and prior decisions to select the offer and exact summary pair. Record the archived summary version and locale shown to the auditor in a regional view receipt. |
+| Summary service and regional evidence | Use approved template artifacts to verify the comparison, render a localized summary and archive each promoted version with its source hashes. Replicate promoted versions to regional evidence stores so the regional API can retrieve the version cited by a receipt. |
 | Engagement manager | Own file creation, opening and decisions. Enforce admission for the actual downstream pool, validate the expected engagement revision, deduplicate effects and provide authoritative status. The template authority orders decision admission against withdrawal. |
 | Regional exception planner | Plan jobs for unknown or flagged baselines against the publication's pinned engagement snapshot. Commit each page and its outbox records in the same transaction. |
-| Regional Java worker | Claim deliveries in a durable execution ledger, authorize submission attempts, reconcile uncertain outcomes and acknowledge SQS after committing a terminal result. |
+| Regional Java worker | Claim deliveries in a durable execution ledger, reserve authorizations against the attempt budget, reconcile uncertain outcomes and acknowledge SQS after committing a terminal result. The engagement manager admits work against the shared downstream limit. |
+
+## Reference APIs and evidence
+
+| Repository entry point | Verified behavior | Regional acceptance |
+| --- | --- | --- |
+| [Regional version selection](../examples/regional-version-selection/README.md) | 13 passing HTTP scenarios cover the offer and summary pair, exact declines, withdrawals, apply outcomes and firm isolation. | Run equivalent checks in the regional updates API owner's CI using the real offer, authorization and engagement contracts. |
+| [Summary validation](../examples/summary-validation/README.md) | 15 passing HTTP scenarios cover byte-hash validation, exact changes, grouping rejection and fallback, editor review and localized receipt replay. | Run equivalent checks in the summary service owner's CI with its artifact store, renderer and durable archive. The reference API keeps its archive and receipts in memory. |
+
+Both reference APIs start a local HTTP server with synthetic fixtures. The owner runs remain pending. [Reports and screenshots](evidence/README.md) · [Owner-side acceptance criteria](owner-acceptance.md)
+
+### Summary generation and receipt replay
+
+1. Resolve the approved baseline and target and verify the SHA-256 hash of each exact byte stream before parsing it. A mismatched artifact stops generation before grouping or promotion.
+2. Compare the two verified versions directly. Record each net change by stable ID, JSON Pointer, operation and typed before/after values. An edit introduced in an intermediate release and reversed by the target leaves no net change.
+3. Render every material change with approved wording for the requested locale. An unsupported material edit sends the comparison to editor review and holds promotion. In the fixtures, C17 changes inventory sign-off from optional to required. C18 adds the exception-reason field. That edit establishes field presence only.
+4. When optional grouping is available, accept only the allowed grouping structure with every verified ID exactly once under a permitted topic. Grouping changes the order and topics of the approved sentences. An invalid or unavailable grouping keeps an existing verified artifact or promotes the complete rules summary when the pair and locale have no previous artifact.
+5. Archive each promoted version with the exact hashes, localized sentences and their change facts. Bind a view receipt to the summary version shown. Resolving the receipt returns the original version and locale after a later version is promoted. The reference API exercises this against an in-memory archive. Production persistence and regional replication belong to the service owners.
 
 ## Dispatch by environment
 
@@ -99,8 +121,8 @@ The regional worker receives new work from SQS. Its ledger stores ownership and 
 
 ## Evidence required for regional readiness
 
-Use a regional test queue, the real engagement manager and multiple worker tasks. Confirm both the manager's shared capacity limit and effect count under redelivery and failures. Verify the real source can reopen the pinned snapshot from a fresh process after the current data changes. The owner-side policy suites run in the regional updates API and summary service.
+Use a regional test queue, the real engagement manager and multiple worker tasks. Confirm both the manager's shared capacity limit and effect count under redelivery and failures. Verify the real source can reopen the pinned snapshot from a fresh process after the current data changes. Run the owner-side suites in the regional updates API and summary service. Record the result of replaying an earlier localized receipt from the durable archive after a newer promotion.
 
-[Regional verification plan](regional-verification.md) · [Owner-side acceptance tests](owner-acceptance.md) · [Worker snapshot contract](worker-design.md#engagement-snapshots)
+[Regional verification plan](regional-verification.md) · [Owner-side acceptance tests](owner-acceptance.md) · [Worker snapshot contract](worker-design.md#engagement-snapshots) · [Repository test evidence](evidence/README.md)
 
 [System proposal and implementation appendix](architecture.pdf) · [Worker design decisions](worker-design.md) · [AWS cost model](aws-cost-model.xlsx)
