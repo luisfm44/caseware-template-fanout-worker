@@ -2,7 +2,7 @@
 
 The proposed deployment publishes template releases per product and market. The regional updates API derives each auditor's offer from verified metadata in the firm's home region. The Java fan-out worker covers background verification for unknown or flagged baselines. Template publication, summary generation, offer decisions and authoritative engagement changes belong to their respective services. [Regional deployment design](https://github.com/luisfm44/caseware-template-fanout-worker/issues/20)
 
-The diagram shows the proposed service boundaries. This repository implements the Java worker and two standalone reference APIs. The [Java worker architecture](worker-architecture.md) describes the worker's PostgreSQL and HTTP integration. The [test evidence index](evidence/README.md) links the reference reports and identifies the evidence that still needs to come from the service owners.
+The diagram shows the proposed service boundaries. This repository implements the Java worker and two local reference APIs. The worker's PostgreSQL and HTTP integration and the connected offer-to-summary flow have executable test evidence. [Java worker architecture](worker-architecture.md) · [Test evidence index](evidence/README.md)
 
 ```mermaid
 ---
@@ -80,10 +80,11 @@ flowchart TB
 
 | Repository entry point | Verified behavior | Regional acceptance |
 | --- | --- | --- |
-| [Regional version selection](../examples/regional-version-selection/README.md) | 13 passing HTTP scenarios cover the offer and summary pair, exact declines, withdrawals, apply outcomes and firm isolation. | Run equivalent checks in the regional updates API owner's CI using the real offer, authorization and engagement contracts. |
-| [Summary validation](../examples/summary-validation/README.md) | 15 passing HTTP scenarios cover byte-hash validation, exact changes, grouping rejection and fallback, editor review and localized receipt replay. | Run equivalent checks in the summary service owner's CI with its artifact store, renderer and durable archive. The reference API keeps its archive and receipts in memory. |
+| [Regional version selection](../examples/regional-version-selection/README.md) | HTTP scenarios cover the offer and summary pair, exact declines, withdrawals, apply outcomes and firm isolation. | Validate the deployed offer, authorization and engagement contracts. |
+| [Summary validation](../examples/summary-validation/README.md) | HTTP scenarios cover byte-hash validation, exact changes, grouping rejection and fallback, editor review and localized receipt replay. | Validate the deployed artifact store, renderer and durable archive. The reference API keeps its archive and receipts in memory. |
+| [Connected reference APIs](../examples/connected-reference-apis/README.md) | A test driver forwards the offered pair, checks the exact localized artifact and its pinned receipt, skips summary generation when there is no offer, and observes rejection of changed bytes. | Validate the deployed service-to-service contract and recover the original receipt after process restarts. |
 
-Both reference APIs start a local HTTP server with synthetic fixtures. The owner runs remain pending. [Reports and screenshots](evidence/README.md) · [Owner-side acceptance criteria](owner-acceptance.md)
+Both reference APIs start a local HTTP server with synthetic fixtures. The connected suite drives both servers in the same test run. Regional deployment acceptance has its own criteria. [Reports and screenshots](evidence/README.md) · [Regional acceptance criteria](owner-acceptance.md)
 
 ### Summary generation and receipt replay
 
@@ -121,7 +122,7 @@ The regional worker receives new work from SQS. Its ledger stores ownership and 
 
 ## Evidence required for regional readiness
 
-Use a regional test queue, the real engagement manager and multiple worker tasks. Confirm both the manager's shared capacity limit and effect count under redelivery and failures. Verify the real source can reopen the pinned snapshot from a fresh process after the current data changes. Run the owner-side suites in the regional updates API and summary service. Record the result of replaying an earlier localized receipt from the durable archive after a newer promotion.
+Use a regional test queue, the real engagement manager and multiple worker tasks. Confirm both the manager's shared capacity limit and effect count under redelivery and failures. Verify the real source can reopen the pinned snapshot from a fresh process after the current data changes. Run the acceptance suites in the deployed regional updates API and summary service. Record the result of replaying an earlier localized receipt from the durable archive after a newer promotion.
 
 [Regional verification plan](regional-verification.md) · [Owner-side acceptance tests](owner-acceptance.md) · [Worker snapshot contract](worker-design.md#engagement-snapshots) · [Repository test evidence](evidence/README.md)
 
