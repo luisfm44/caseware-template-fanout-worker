@@ -4,7 +4,7 @@ This Caseware Staff Java take-home demonstrates how to plan a template publicati
 
 ## Caseware feedback and verified results
 
-**118 tests passed on `main` at `362ef1c`.** The worker passed the SonarQube Quality Gate with 100% overall coverage and 100% JaCoCo line and branch coverage. [CI run](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632) · [Test evidence guide](docs/evidence/README.md) · [Quality reports](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910676292)
+**Recorded baseline.** At `362ef1c` on `main`, 118 tests passed. The worker passed the SonarQube Quality Gate with 100% overall coverage and 100% JaCoCo line and branch coverage. [CI run](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632) · [Test evidence guide](docs/evidence/README.md) · [Quality reports](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910676292)
 
 | Feedback | What the tests demonstrate | Report |
 | --- | --- | --- |
@@ -16,6 +16,8 @@ This Caseware Staff Java take-home demonstrates how to plan a template publicati
 **Worker recovery.** The **48 unit tests and 31 PostgreSQL integration tests** include a fresh planner resuming from its pinned snapshot and two late-confirmation races. An expired lease can still settle while its claim token and attempt match. Once another JVM replaces the token, it reconciles the same attempt and releases the reservation on settlement. [Worker tests](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632/artifacts/13910411563) · [Process-test assertions](docs/worker-architecture.md#verification)
 
 **Connected reference evidence.** A local test driver forwards the exact regional offer pair to summary validation over HTTP. It checks the original French Canadian summary view receipt after a later revision, zero summary calls for a withheld offer and rejection of changed artifact bytes. The regional deployment has separate criteria for its service contracts, durable archive and queue. [Connected test guide](examples/connected-reference-apis/README.md) · [Regional rollout criteria](docs/regional-verification.md)
+
+**Follow-up regressions.** The process suite also covers a slow confirmed lookup and a PostgreSQL disconnect after the downstream effect. The summary suite checks that a replacement mock returns `404` for the prior instance's identifiers. [Latest main CI runs](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/ci.yml?query=branch%3Amain+event%3Apush) · [Regression scenarios](docs/evidence/README.md#reproduce-the-postgresql-tests)
 
 ## Developer documentation
 

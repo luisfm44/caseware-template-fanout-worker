@@ -1,5 +1,7 @@
 # Caseware feedback and test evidence
 
+## Recorded baseline
+
 The [CI run](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43142807632) for commit `362ef1c` on `main` passed all six jobs. The downloaded Surefire and Failsafe results record **118 passing tests** with zero failures, errors or skips.
 
 | CI evidence | Verified result | Open the report |
@@ -13,6 +15,10 @@ The [CI run](https://github.com/luisfm44/caseware-template-fanout-worker/actions
 Find the worker XML under `surefire-reports/` and `failsafe-reports/`. The quality archive contains `site/jacoco/index.html` and `sonar-quality/summary.md`. For any of the three HTTP suites, extract the archive and open `evidence/index.html` for the scenarios, fixtures and captured responses. GitHub applies the workflow retention periods to these downloads. Use a newer run or the local commands below when an archive expires. [Verify and scan history](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/ci.yml) · [Artifact retention](../pipelines.md)
 
 The previous baseline at `b80c148` recorded 105 tests before the late-lease, offer-receipt and connected-flow changes. The #26 screenshots show the original 13 regional scenarios. [Historical CI run](https://github.com/luisfm44/caseware-template-fanout-worker/actions/runs/43134129499) · [Historical screenshots](issue-26/README.md)
+
+## Follow-up regressions
+
+The current suite adds slow-response and stale-deferral coverage for [#44](https://github.com/luisfm44/caseware-template-fanout-worker/issues/44), database outage recovery for [#45](https://github.com/luisfm44/caseware-template-fanout-worker/issues/45) and receipt isolation across mock instances for [#46](https://github.com/luisfm44/caseware-template-fanout-worker/issues/46). The latest successful main run has the current reports and SonarQube gate result. [Main CI runs](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/ci.yml?query=branch%3Amain+event%3Apush)
 
 ## Feedback, implementation and acceptance
 
@@ -63,7 +69,7 @@ Use JDK 25. Each suite starts its own Spring Boot server on loopback, sends real
 ```
 
 - **Regional version selection** uses controlled catalog releases, authenticated firm and file context and a manager with controllable baseline and apply status. The suite asserts exact offers and holds, withdrawal and replacement, scoped declines, the original offer receipt, and when confirmed success advances the baseline. [Generate the regional report](../../examples/regional-version-selection/README.md)
-- **Summary validation** varies the approved v4 and v7 bytes, grouping output and provider outcome. It checks C17 and C18 only, complete rules on failure, the editorial hold and the exact French v7 artifact returned after v8 is promoted. [Generate the summary report](../../examples/summary-validation/README.md)
+- **Summary validation** varies the approved v4 and v7 bytes, grouping output and provider outcome. It checks C17 and C18 only, complete rules on failure, the editorial hold and the exact French v7 artifact returned after v8 is promoted and a 404 for an older instance’s identifiers after a replacement mock archives v8. [Generate the summary report](../../examples/summary-validation/README.md)
 
 ## Reproduce the connected HTTP flow
 

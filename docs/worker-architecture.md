@@ -78,7 +78,7 @@ Lease expiry allows another process to replace the claim token while the downstr
 | [`SharedAdmissionTest`][test] | Creates two workers with the same dependencies, makes them compete for the last slot and verifies that the peak is three. It also verifies slot retention after a caller timeout. |
 | [`PublicationFanout`][planner] and [`EngagementSource`][source] | Read bounded, stable pages of eligible engagements and produce job IDs. |
 | [`PostgresFanoutStore`][store] | Persists each page's jobs and snapshot checkpoint in one transaction. |
-| [`PostgresJobQueue`][queue] and [`JobQueue`][job-port] | Claim due attempts and reserve schema-wide capacity for fresh jobs in firm rotation. The queue checks the live lease for defer and the current token and attempt ID for settlement. |
+| [`PostgresJobQueue`][queue] and [`JobQueue`][job-port] | Claim due attempts and reserve schema-wide capacity for fresh jobs in firm rotation. The queue compares the current token and attempt ID for both deferral and settlement. |
 | [`HttpAttemptTransport`][http-transport] and [`AttemptTransport`][attempt-port] | Submit and resolve authorized attempts over HTTP using the stable operation ID and attempt ID. |
 | [`RetryingDownstreamClient`][retry] and [`DownstreamTransport`][transport] | Apply the retry policy and submit or reconcile a downstream operation by ID. |
 | [`TemplateFanoutWorkerApplication`][boot] | Starts Spring Boot 4.1.2 and discovers the runner for the selected profile. |
