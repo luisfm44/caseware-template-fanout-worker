@@ -1,0 +1,24 @@
+{
+  "issue": 35,
+  "title": "Connected reference API results",
+  "scenarios": [
+    {
+      "test": "followsTheOfferedPairAndKeepsTheOriginalFrenchReceipt",
+      "slug": "pinned-receipt",
+      "title": "Offered pair and pinned receipt",
+      "expected": "The driver forwards v4 → v7 to summary validation. The artifact contains both approved hashes and exactly C17 and C18. A later v4 → v8 offer creates a different artifact. The first receipt still returns the exact v7 summary in fr-CA."
+    },
+    {
+      "test": "doesNotRequestASummaryForAWithheldOffer",
+      "slug": "withheld-offer",
+      "title": "Withheld offer",
+      "expected": "The regional API supplies no summary pair. The summary HTTP server observes zero generation requests and reads no approved artifacts."
+    },
+    {
+      "test": "rejectsTamperedBytesForTheOfferedTarget",
+      "slug": "changed-approved-bytes",
+      "title": "Changed approved bytes",
+      "expected": "The regional API offers v4 → v7. Summary validation returns HTTP 422 HASH_MISMATCH for the changed bytes, emits no artifact and never calls the grouping fixture."
+    }
+  ]
+}
