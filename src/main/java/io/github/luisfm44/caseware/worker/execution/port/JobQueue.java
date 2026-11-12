@@ -10,8 +10,13 @@ import io.github.luisfm44.caseware.worker.execution.port.AttemptTransport.Outcom
 /** Durable execution state and capacity reservations for the worker. */
 public interface JobQueue {
 
-    /** Reclaims a due attempt or reserves capacity and claims a fresh one. */
-    Optional<Claim> claimReady();
+    /** Reclaims a due attempt first, with fresh admission as fallback. */
+    default Optional<Claim> claimReady() {
+        return claimReady(ClaimPreference.RECONCILIATION);
+    }
+
+    /** Tries the preferred kind of claim first, falling back to the other kind when unavailable. */
+    Optional<Claim> claimReady(ClaimPreference preference);
 
     /**
      * Releases the claim for a later poll while retaining the attempt and its reservation.
@@ -30,6 +35,11 @@ public interface JobQueue {
         public Unavailable(Throwable cause) {
             super("Lost connectivity to the durable job queue", cause);
         }
+    }
+
+    enum ClaimPreference {
+        RECONCILIATION,
+        ADMISSION
     }
 
     record Claim(OperationId operationId, UUID token, UUID attemptId, int submissions, int pollCount,

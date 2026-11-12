@@ -114,11 +114,12 @@ public final class PostgresJobQueue implements JobQueue {
         }
     }
 
-    /** Reclaims due attempts first, then takes the next firm turn and reserves its slot atomically. */
     @Override
-    public Optional<Claim> claimReady() {
-        var reconciliation = query(this::claimReconciliation);
-        return reconciliation.isPresent() ? reconciliation : transaction(this::claimNextFirm);
+    public Optional<Claim> claimReady(ClaimPreference preference) {
+        if (preference == ClaimPreference.ADMISSION) {
+            return transaction(this::claimNextFirm).or(() -> query(this::claimReconciliation));
+        }
+        return query(this::claimReconciliation).or(() -> transaction(this::claimNextFirm));
     }
 
     private Optional<Claim> claimReconciliation(Connection connection) throws SQLException {

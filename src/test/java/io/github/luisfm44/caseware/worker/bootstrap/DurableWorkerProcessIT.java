@@ -333,6 +333,70 @@ class DurableWorkerProcessIT {
         }
     }
 
+    @Test
+    void aSmallFirmUsesSpareCapacityWhileTwoJvmsReconcileTheLargeFirm() throws Exception {
+        var moreLargeJobs = List.of(new Engagement("large-engagement-1", "revision-1"),
+                new Engagement("large-engagement-2", "revision-1"));
+        plan(database, new Publication(PUBLICATION.firmId(), "pending-publication"), moreLargeJobs);
+        int largeJobCount = moreLargeJobs.size() + 2; // Include the two jobs seeded by createSchema.
+        int capacity = largeJobCount + 1;
+        var smallPublication = new Publication("firm-small", "small-publication");
+        var small = new OperationId(smallPublication.firmId(), "small-engagement",
+                smallPublication.publicationId(), "revision-1");
+
+        try (var manager = new RecordingManager(FirstRequest.PENDING_LARGE_FIRM);
+                var first = startWorker(manager.url(), "first", capacity, 60_000);
+                var second = startWorker(manager.url(), "second", capacity, 60_000)) {
+            assertThat(first.process().pid()).isNotEqualTo(second.process().pid());
+            eventually(second, () -> assertThat(manager.submissions()).hasSize(largeJobCount));
+            eventually(second, () -> assertThat(deferredReservations()).isEqualTo(largeJobCount));
+            var original = manager.submissions();
+            assertThat(original).hasSize(largeJobCount)
+                    .allSatisfy(attempt -> assertThat(attempt.operation().firmId()).isEqualTo(PUBLICATION.firmId()));
+            var expected = new HashMap<String, Execution>();
+            original.forEach(attempt -> expected.put(attempt.operation().engagementId(),
+                    new Execution("SUBMITTED", 1, attempt.id())));
+            assertThat(executions(database)).containsExactlyInAnyOrderEntriesOf(expected);
+
+            // Make all four deferred attempts due at once. Each JVM holds one status request,
+            // leaving two other attempts eligible when the first controlled PENDING reply arrives.
+            execute(database, """
+                    UPDATE fanout_job SET available_at = clock_timestamp()
+                    WHERE execution_state = 'SUBMITTED'
+                    """);
+            eventually(second, () -> assertThat(manager.resolutions()).hasSize(2));
+            plan(database, smallPublication, List.of(new Engagement(small.engagementId(), small.engagementRevision())));
+            assertThat(executions(database).get(small.engagementId())).isEqualTo(new Execution("READY", 0, null));
+            manager.releaseResolutionReply(manager.resolutions().getFirst());
+
+            // A third lookup before the small submission shows the old strict priority.
+            eventually(second, () -> assertThat(manager.submissions().size() > largeJobCount
+                    || manager.resolutions().size() > 2).as("next request after a held status reply").isTrue());
+            assertThat(manager.submissions()).extracting(Attempt::operation)
+                    .as("admission gets the spare slot even while other lookups are due").contains(small);
+
+            expected.put(small.engagementId(), new Execution("APPLIED", 1, null));
+            eventually(second, () -> assertThat(executions(database)).containsExactlyInAnyOrderEntriesOf(expected));
+            assertThat(manager.submissions()).hasSize(capacity);
+            assertThat(manager.effects()).containsExactlyEntriesOf(Map.of(small, 1));
+            assertThat(manager.active()).isEqualTo(largeJobCount);
+            assertThat(manager.peak()).isEqualTo(capacity);
+            assertThat(first.process().isAlive()).isTrue();
+            assertThat(second.process().isAlive()).isTrue();
+        }
+    }
+
+    private int deferredReservations() throws SQLException {
+        try (var connection = database.getConnection(); var statement = connection.createStatement();
+                var rows = statement.executeQuery("""
+                        SELECT count(*) FROM fanout_job
+                        WHERE execution_state = 'SUBMITTED' AND claim_token IS NULL AND poll_count = 1
+                        """)) {
+            rows.next();
+            return rows.getInt(1);
+        }
+    }
+
     private void completeNextAndVerify(WorkerProcess worker, RecordingManager manager) throws IOException {
         eventually(worker, () -> assertThat(manager.submissions()).extracting(Attempt::operation)
                 .containsExactly(FIRST, NEXT));
@@ -442,7 +506,7 @@ class DurableWorkerProcessIT {
 
     private record Attempt(OperationId operation, UUID id) {}
 
-    private enum FirstRequest { IMMEDIATE, HOLD_REPLY, HOLD_BEFORE_ADMISSION, HOLD_ALL_REPLIES }
+    private enum FirstRequest { IMMEDIATE, HOLD_REPLY, HOLD_BEFORE_ADMISSION, HOLD_ALL_REPLIES, PENDING_LARGE_FIRM }
 
     private record WorkerProcess(Process process, Path log) implements AutoCloseable {
 
@@ -513,6 +577,7 @@ class DurableWorkerProcessIT {
         private final Map<OperationId, Integer> effects = new HashMap<>();
         private final Map<String, String> currentRevisions = new HashMap<>();
         private final Map<Attempt, CountDownLatch> heldReplies = new HashMap<>();
+        private final Map<Attempt, CountDownLatch> heldResolutionReplies = new HashMap<>();
         private final Set<Attempt> active = new HashSet<>();
         private final Set<Attempt> fenced = new HashSet<>();
         private final Set<Attempt> rejectedLate = new HashSet<>();
@@ -547,7 +612,10 @@ class DurableWorkerProcessIT {
                 }
                 var outcome = start(attempt);
                 if ("PENDING".equals(outcome)) {
-                    if (firstRequest == FirstRequest.HOLD_ALL_REPLIES) {
+                    if (firstRequest == FirstRequest.PENDING_LARGE_FIRM) {
+                        exchange.getResponseHeaders().set("Retry-After", "600");
+                        reply(exchange, 200, outcome);
+                    } else if (firstRequest == FirstRequest.HOLD_ALL_REPLIES) {
                         awaitLatch(heldReply(attempt));
                         reply(exchange, 200, "APPLIED");
                     } else {
@@ -580,6 +648,9 @@ class DurableWorkerProcessIT {
                 heldReplies.put(attempt, new CountDownLatch(1));
                 return "PENDING";
             }
+            if (firstRequest == FirstRequest.PENDING_LARGE_FIRM && PUBLICATION.firmId().equals(operation.firmId())) {
+                return "PENDING";
+            }
             if (firstRequest == FirstRequest.HOLD_REPLY && FIRST.equals(attempt.operation())) {
                 return "PENDING";
             }
@@ -590,10 +661,7 @@ class DurableWorkerProcessIT {
         private void resolve(HttpExchange exchange) throws IOException {
             try (exchange) {
                 var attempt = readAttempt(exchange);
-                synchronized (this) {
-                    resolutions.add(attempt);
-                }
-                awaitLatch(resolutionReplies);
+                awaitLatch(recordResolution(attempt));
                 var outcome = status(attempt);
                 if (outcome == null) {
                     reply(exchange, 503, "status unavailable");
@@ -601,6 +669,20 @@ class DurableWorkerProcessIT {
                     reply(exchange, 200, outcome);
                 }
             }
+        }
+
+        private synchronized CountDownLatch recordResolution(Attempt attempt) {
+            resolutions.add(attempt);
+            if (firstRequest != FirstRequest.PENDING_LARGE_FIRM) {
+                return resolutionReplies;
+            }
+            var reply = new CountDownLatch(1);
+            heldResolutionReplies.put(attempt, reply);
+            return reply;
+        }
+
+        synchronized void releaseResolutionReply(Attempt attempt) {
+            heldResolutionReplies.get(attempt).countDown();
         }
 
         private synchronized String status(Attempt attempt) {
@@ -741,6 +823,7 @@ class DurableWorkerProcessIT {
             releaseResolutionReplies();
             synchronized (this) {
                 heldReplies.values().forEach(CountDownLatch::countDown);
+                heldResolutionReplies.values().forEach(CountDownLatch::countDown);
             }
             server.stop(0);
             executor.close();

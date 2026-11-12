@@ -46,7 +46,7 @@ flowchart TB
 ```
 
 1. [`DurableWorkerRunner`][durable-runner] starts the polling loop. All replicas in a pool share a PostgreSQL schema, capacity and downstream origin. The planner initializes the schema and inserts the jobs before workers consume them.
-2. [`PostgresJobQueue`][queue] first reclaims eligible attempts whose claims expired or were deferred. For new work it locks the pool row, checks for an available slot, selects the next eligible firm, leases a job and records an authorized attempt. The reservation and firm cursor advance in the same transaction.
+2. The polling loop alternates its preferred claim between due reconciliation and new admission after each successful claim. It tries the other kind when the preferred claim is unavailable. [`PostgresJobQueue`][queue] reclaims attempts whose claims expired or were deferred and are due again. For new work it locks the pool row, checks for an available slot, selects the next eligible firm, leases a job and records an authorized attempt. The reservation and firm cursor advance in the same transaction.
 3. [`DurableWorker`][durable-worker] submits a new attempt through [`HttpAttemptTransport`][http-transport]. A reclaimed attempt goes to the status endpoint with its original operation and attempt IDs. A pending or uncertain response defers the next lookup only while the same token and attempt ID still match. The reservation stays with the attempt. A confirmed result settles the attempt and frees capacity.
 
 Lease expiry allows another process to replace the claim token while the downstream operation still occupies its slot. Reclaimed status lookups get the HTTP deadline plus the configured claim margin, and the HTTP adapter bounds the full response. A confirmed result can settle while the token and attempt ID still match, including after lease expiry. Once the token is replaced, the old worker reports the lost claim and leaves settlement to the new claimant. The durable attempt budget counts authorizations, including a process exit before an HTTP call. On a transient PostgreSQL failure, the worker backs off and resumes from the persisted queue state. The regional deployment depends on an engagement manager that validates the engagement revision and owns authoritative status, idempotency and the regional capacity limit. [Durable worker design](worker-design.md#durable-consumption-and-shared-capacity) · [Proposed regional architecture](system-architecture.md)
@@ -182,7 +182,8 @@ Run the process suite with JDK 25 and PostgreSQL started as described in [Run lo
 | Confirmed result after claim replacement | The first JVM receives a late confirmation after the second JVM replaces the token. Its update changes zero rows. The next job waits until the second JVM settles the same attempt. Each operation has one effect and the peak is one. |
 | Fenced delayed request | The downstream confirms no effect and fences the old attempt. It rejects the delayed request when delivered. The surviving JVM retries with a different attempt ID under the same operation ID. The final effect count is one per operation. |
 | Stale engagement revision | The controlled downstream rejects the stale operation without an effect. The worker records the terminal rejection. |
-| Small firm joins a large backlog | Two JVMs fill a pool of two. The small firm receives the next free slot while 30 large-firm jobs remain ready. The large firm resumes after that turn and the measured peak stays at two. |
+| Small firm joins a large ready backlog | Two JVMs fill a pool of two. The small firm receives the next free slot while 30 large-firm jobs remain ready. The large firm resumes after that turn and the measured peak stays at two. |
+| Small firm joins during slow reconciliation | The small firm uses the fifth slot and reaches `APPLIED` with one effect while four original large-firm attempts stay reserved. The measured peak is five. |
 
 ### Process loss test sequence
 
@@ -255,6 +256,42 @@ sequenceDiagram
         P-->>B: Update one row and free the slot
     end
     Note over B,H: Job 2 can start, one effect per operation, peak of one
+```
+
+### Mixed admission and reconciliation test sequence
+
+The test holds both JVMs in status lookups while four large-firm attempts reserve slots in a pool of five. After adding the small firm's job, the fixture releases one pending reply. Two other reconciliations are still due. The next downstream request submits the small firm's job.
+
+```mermaid
+---
+config:
+  theme: neutral
+  sequence:
+    mirrorActors: false
+---
+sequenceDiagram
+    participant A as Worker JVM A
+    participant B as Worker JVM B
+    participant P as Shared PostgreSQL
+    participant H as Controlled HTTP downstream
+
+    Note over P,H: Four large-firm attempts are SUBMITTED. The fifth slot is free.
+    par Worker A reconciles
+        A->>P: Claim a due large-firm attempt
+        A->>H: Resolve the original attempt
+    and Worker B reconciles
+        B->>P: Claim another due large-firm attempt
+        B->>H: Resolve the original attempt
+    end
+    Note over P: Small-firm job becomes READY
+    H-->>A: Return PENDING after a delay
+    A->>P: Defer the lookup and keep its reservation
+    A->>P: Try fresh admission before the next reconciliation
+    P-->>A: Reserve the free slot for the small firm
+    A->>H: Submit the small-firm attempt
+    H-->>A: Return APPLIED after one effect
+    A->>P: Settle the small-firm attempt and release its slot
+    Note over P,H: Four original reservations are still active. The measured peak is five.
 ```
 
 - [`SharedAdmissionTest`][test] measures the downstream concurrency peak and verifies permit retention after a caller timeout.

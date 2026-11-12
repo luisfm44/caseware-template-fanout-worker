@@ -17,7 +17,7 @@ This Caseware Staff Java take-home demonstrates how to plan a template publicati
 
 **Connected reference evidence.** A local test driver forwards the exact regional offer pair to summary validation over HTTP. It checks the original French Canadian summary view receipt after a later revision, zero summary calls for a withheld offer and rejection of changed artifact bytes. The regional deployment has separate criteria for its service contracts, durable archive and queue. [Connected test guide](examples/connected-reference-apis/README.md) · [Regional rollout criteria](docs/regional-verification.md)
 
-**Follow-up regressions.** The process suite also covers a slow confirmed lookup and a PostgreSQL disconnect after the downstream effect. The summary suite checks that a replacement mock returns `404` for the prior instance's identifiers. [Latest main CI runs](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/ci.yml?query=branch%3Amain+event%3Apush) · [Regression scenarios](docs/evidence/README.md#reproduce-the-postgresql-tests)
+**Follow-up regressions.** The process suite covers a slow confirmed lookup and a PostgreSQL disconnect after the downstream effect. It also verifies that a small firm can use a free slot while the two JVMs keep reconciling a large firm's reserved attempts. The summary suite checks that a replacement mock returns `404` for the prior instance's identifiers. [Latest main CI runs](https://github.com/luisfm44/caseware-template-fanout-worker/actions/workflows/ci.yml?query=branch%3Amain+event%3Apush) · [Regression scenarios](docs/evidence/README.md#reproduce-the-postgresql-tests)
 
 ## Developer documentation
 
@@ -35,7 +35,7 @@ Planning pins a source snapshot and commits each page of jobs with its checkpoin
 <!-- Image exported from the Mermaid diagram in docs/worker-architecture.md. -->
 ![Durable worker with two independent JVMs sharing PostgreSQL claims and capacity, and a common HTTP downstream.](docs/worker-architecture.svg)
 
-[Distributed crash-test sequence](docs/worker-architecture.md#process-loss-test-sequence) · [Late-confirmation test sequence](docs/worker-architecture.md#late-confirmation-test-sequence) · [Worker design decisions](docs/worker-design.md)
+[Distributed crash-test sequence](docs/worker-architecture.md#process-loss-test-sequence) · [Late-confirmation test sequence](docs/worker-architecture.md#late-confirmation-test-sequence) · [Mixed-workload test sequence](docs/worker-architecture.md#mixed-admission-and-reconciliation-test-sequence) · [Worker design decisions](docs/worker-design.md)
 
 See the [Java package structure](docs/worker-architecture.md#package-structure) for the application services, contracts, adapters and Spring Boot entry points.
 
@@ -100,7 +100,7 @@ With PostgreSQL running, execute the cross-process regression.
 ./mvnw -Ppostgres-integration -Dit.test=DurableWorkerProcessIT,PublicationSnapshotIT verify
 ```
 
-The worker process suite seeds planned jobs, starts two independent JVMs against one HTTP test downstream, kills the first JVM and checks durable recovery, one effect per operation and a measured peak of one. Separate scenarios verify late confirmation before and after claim takeover, late-request fencing, stale revision rejection and cross-firm scheduling. The snapshot suite starts a fresh planner JVM against the persisted checkpoint after the controlled HTTP source changes. [Test setup and assertions](docs/evidence/README.md#reproduce-the-postgresql-tests)
+The worker process suite seeds planned jobs, starts two independent JVMs against one HTTP test downstream, kills the first JVM and checks durable recovery, one effect per operation and a measured peak of one. Separate scenarios verify late confirmation before and after claim takeover, late-request fencing, stale revision rejection and cross-firm scheduling with both a ready backlog and slow pending reconciliations. The snapshot suite starts a fresh planner JVM against the persisted checkpoint after the controlled HTTP source changes. [Test setup and assertions](docs/evidence/README.md#reproduce-the-postgresql-tests)
 
 #### Run two durable workers locally
 
