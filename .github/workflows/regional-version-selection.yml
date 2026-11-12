@@ -1,21 +1,7 @@
 name: Regional version selection E2E
 
 on:
-  push:
-    paths:
-      - 'examples/regional-version-selection/**'
-      - '.github/workflows/regional-version-selection.yml'
-      - '.mvn/wrapper/**'
-      - 'mvnw'
-      - 'mvnw.cmd'
-  pull_request:
-    branches: [main]
-    paths:
-      - 'examples/regional-version-selection/**'
-      - '.github/workflows/regional-version-selection.yml'
-      - '.mvn/wrapper/**'
-      - 'mvnw'
-      - 'mvnw.cmd'
+  workflow_call:
   workflow_dispatch:
 
 permissions:
@@ -40,7 +26,7 @@ jobs:
         run: ./mvnw --batch-mode --no-transfer-progress -f examples/regional-version-selection/pom.xml -DfailIfNoTests=true clean test
       - name: Generate scenario report
         id: report
-        if: ${{ !cancelled() && hashFiles('examples/regional-version-selection/target/surefire-reports/TEST-io.github.luisfm44.caseware.regional.RegionalVersionSelectionHttpTest.xml') != '' }}
+        if: ${{ !cancelled() && (success() || hashFiles('examples/regional-version-selection/target/surefire-reports/TEST-io.github.luisfm44.caseware.regional.RegionalVersionSelectionHttpTest.xml') != '') }}
         run: |
           python3 examples/regional-version-selection/tools/render_evidence.py \
             examples/regional-version-selection/target/surefire-reports/TEST-io.github.luisfm44.caseware.regional.RegionalVersionSelectionHttpTest.xml \
