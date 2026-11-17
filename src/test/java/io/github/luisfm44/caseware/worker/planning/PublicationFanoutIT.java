@@ -22,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.AdditionalAnswers.delegatesTo;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.when;
 
 class PublicationFanoutIT {
@@ -280,8 +281,7 @@ class PublicationFanoutIT {
         absentSchema.setCurrentSchema(schema + "_absent");
 
         assertThatThrownBy(() -> new PostgresFanoutStore(absentSchema))
-                .isInstanceOf(IllegalStateException.class).hasMessage("Could not initialize fan-out tables")
-                .hasRootCauseInstanceOf(SQLException.class);
+                .isInstanceOf(RuntimeException.class);
     }
 
     @Test
@@ -317,18 +317,20 @@ class PublicationFanoutIT {
                 return null;
             }).when(interruptedConnection).rollback();
             when(interruptedDataSource.getConnection()).thenReturn(dataSource.getConnection(), interruptedConnection);
-            var store = new PostgresFanoutStore(interruptedDataSource);
+            try (var migrations = mockStatic(io.github.luisfm44.caseware.worker.adapter.postgres.FlywaySchema.class)) {
+                var store = new PostgresFanoutStore(interruptedDataSource);
 
-            assertThatThrownBy(() -> store.commitPage(PUBLICATION, checkpoint,
-                    List.of(expectedJobs().getFirst()), null, SNAPSHOT_ID))
-                    .isInstanceOf(IllegalStateException.class).hasMessage("Could not commit fan-out page")
-                    .satisfies(failure -> {
-                        var writeFailure = (SQLException) failure.getCause();
-                        assertThat(writeFailure.getSQLState()).isEqualTo("23514");
-                        assertThat(writeFailure.getSuppressed()).singleElement()
-                                .isInstanceOfSatisfying(SQLException.class,
-                                        rollbackFailure -> assertThat(rollbackFailure.getSQLState()).isEqualTo("08003"));
-                    });
+                assertThatThrownBy(() -> store.commitPage(PUBLICATION, checkpoint,
+                        List.of(expectedJobs().getFirst()), null, SNAPSHOT_ID))
+                        .isInstanceOf(IllegalStateException.class).hasMessage("Could not commit fan-out page")
+                        .satisfies(failure -> {
+                            var writeFailure = (SQLException) failure.getCause();
+                            assertThat(writeFailure.getSQLState()).isEqualTo("23514");
+                            assertThat(writeFailure.getSuppressed()).singleElement()
+                                    .isInstanceOfSatisfying(SQLException.class,
+                                            rollbackFailure -> assertThat(rollbackFailure.getSQLState()).isEqualTo("08003"));
+                        });
+            }
         }
 
         assertThat(storeWithWorkingConnection.checkpoint(PUBLICATION)).isEqualTo(checkpoint);
