@@ -137,19 +137,15 @@ class PublicationSnapshotIT {
         var completed = new Publication(PUBLICATION.firmId(), "completed-before-snapshots");
         assertThat(initialStore.commitPage(completed, initialStore.checkpoint(completed), List.of(), null, PINNED))
                 .isTrue();
+        // A manually altered legacy schema must not be implicitly repaired by a runtime constructor.
         execute("ALTER TABLE " + schema + ".fanout_checkpoint DROP COLUMN snapshot_id");
 
         var migrated = store();
-        var planner = new PublicationFanout(source, migrated, PAGE_SIZE);
-        assertThatThrownBy(() -> planner.plan(PUBLICATION))
-                .isInstanceOf(SnapshotUnavailableException.class)
-                .hasMessageContaining("snapshot");
-        assertThat(planner.planNextPage(completed)).isFalse();
-
-        assertThat(source.requests()).containsExactly("null\tnull");
-        assertThat(migrated.checkpoint(PUBLICATION)).isEqualTo(new Checkpoint(1, "engagement-3", false, null));
-        assertThat(migrated.checkpoint(completed)).isEqualTo(new Checkpoint(1, null, true, null));
-        assertThat(migrated.listJobs(PUBLICATION, 10)).containsExactlyElementsOf(operations(ORIGINAL.subList(0, 2)));
+        assertThatThrownBy(() -> migrated.checkpoint(PUBLICATION))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessage("Could not read fan-out checkpoint");
+        assertThat(migrated.listJobs(PUBLICATION, 10))
+                .containsExactlyElementsOf(operations(ORIGINAL.subList(0, 2)));
     }
 
     private static void planFirstPage(EngagementSource source, PostgresFanoutStore store) {

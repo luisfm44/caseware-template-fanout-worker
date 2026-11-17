@@ -59,6 +59,15 @@ Use JDK 25. The checked-in Apache Maven Wrapper downloads Maven 3.9.16 on its fi
 
 Windows users can use `mvnw.cmd`. Packaging produces `target/template-fanout-worker.jar`.
 
+### Flyway-managed schema
+
+PostgreSQL tables, execution columns, constraints, and indexes are versioned in
+`src/main/resources/db/migration`. New worker schemas must exist but be **empty**;
+the application applies pending Flyway migrations before planner or worker SQL.
+Flyway will not silently baseline existing non-empty schemas. Do not point this
+feature at an existing demo or production schema without an audited adoption
+plan. See [Flyway migration and onboarding guide](docs/flyway-migrations.md).
+
 ### PostgreSQL integration tests and executable demo
 
 From a clean checkout with JDK 25 and Docker Compose, start the PostgreSQL 18.6 service in [`compose.yaml`](compose.yaml), run the tests and launch the packaged demo.

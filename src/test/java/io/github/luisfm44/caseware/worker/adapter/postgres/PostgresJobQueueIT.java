@@ -199,9 +199,7 @@ class PostgresJobQueueIT {
         seed(FIRST, SECOND);
         var original = new PostgresJobQueue(database, 1, LEASE);
         var claim = original.claimReady().orElseThrow();
-        execute("DROP INDEX fanout_job_ready_by_firm");
-        execute("ALTER TABLE fanout_capacity DROP COLUMN last_firm_id");
-
+        // Reopening a repository must not rewrite schema objects or lose an in-flight attempt.
         var upgraded = new PostgresJobQueue(database, 1, LEASE);
         assertThat(upgraded.claimReady()).isEmpty();
         expireFirstClaim();
@@ -230,18 +228,36 @@ class PostgresJobQueueIT {
     }
 
     @Test
+    void refusesToBaselineUntrackedLegacySchemaOrDeleteItsData() throws SQLException {
+        execute("CREATE TABLE existing_audit_data (id INTEGER PRIMARY KEY)");
+        execute("INSERT INTO existing_audit_data (id) VALUES (42)");
+
+        assertThatThrownBy(() -> new PostgresFanoutStore(database))
+                .isInstanceOf(RuntimeException.class);
+
+        try (var connection = database.getConnection();
+                var statement = connection.createStatement();
+                var rows = statement.executeQuery("SELECT id FROM existing_audit_data")) {
+            assertThat(rows.next()).isTrue();
+            assertThat(rows.getInt(1)).isEqualTo(42);
+        }
+    }
+
+    @Test
     void reportsTheOriginalFailureIfRollbackAlsoFails() throws SQLException {
         var connection = mock(Connection.class);
         var source = mock(DataSource.class);
-        var writeFailure = new SQLException("could not prepare schema");
+        var writeFailure = new SQLException("could not reserve capacity");
         var rollbackFailure = new SQLException("lost database connection");
         when(source.getConnection()).thenReturn(connection);
-        when(connection.createStatement()).thenThrow(writeFailure);
+        when(connection.prepareStatement(org.mockito.ArgumentMatchers.anyString())).thenThrow(writeFailure);
         doThrow(rollbackFailure).when(connection).rollback();
 
-        assertThatThrownBy(() -> new PostgresJobQueue(source, 1, LEASE))
-                .hasCause(writeFailure);
-        assertThat(writeFailure.getSuppressed()).containsExactly(rollbackFailure);
+        try (var migrations = org.mockito.Mockito.mockStatic(FlywaySchema.class)) {
+            assertThatThrownBy(() -> new PostgresJobQueue(source, 1, LEASE))
+                    .hasCause(writeFailure);
+            assertThat(writeFailure.getSuppressed()).containsExactly(rollbackFailure);
+        }
     }
 
     private void seed(OperationId... jobs) {

@@ -44,74 +44,20 @@ public final class PostgresJobQueue implements JobQueue {
                     + "duration must be at least the claim duration");
         }
 
+        FlywaySchema.migrate(dataSource);
         transaction(connection -> {
-            try (var statement = connection.createStatement()) {
-                statement.execute("SELECT pg_advisory_xact_lock(6975431162778140921)");
-                statement.execute("""
-                        CREATE TABLE IF NOT EXISTS fanout_capacity (
-                            singleton BOOLEAN PRIMARY KEY CHECK (singleton),
-                            capacity INTEGER NOT NULL CHECK (capacity > 0)
-                        )
-                        """);
-            }
             try (var insert = connection.prepareStatement("""
                     INSERT INTO fanout_capacity (singleton, capacity) VALUES (TRUE, ?)
                     ON CONFLICT (singleton) DO NOTHING
                     """)) {
                 insert.setInt(1, capacity);
-                if (insert.executeUpdate() == 1) {
-                    initializeExecutionColumns(connection);
-                }
+                insert.executeUpdate();
             }
-            initializeFirmRotation(connection);
             if (lockPool(connection).capacity() != capacity) {
                 throw new IllegalArgumentException("worker capacity differs from the capacity configured for this schema");
             }
             return null;
         });
-    }
-
-    private static void initializeExecutionColumns(Connection connection) throws SQLException {
-        try (var statement = connection.createStatement()) {
-            statement.execute("""
-                    ALTER TABLE fanout_job
-                        ADD COLUMN execution_state TEXT NOT NULL DEFAULT 'READY',
-                        ADD COLUMN available_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                        ADD COLUMN claim_token UUID,
-                        ADD COLUMN claim_until TIMESTAMPTZ,
-                        ADD COLUMN attempt_id UUID,
-                        ADD COLUMN authorized_at TIMESTAMPTZ,
-                        ADD COLUMN submissions INTEGER NOT NULL DEFAULT 0,
-                        ADD COLUMN poll_count INTEGER NOT NULL DEFAULT 0,
-                        ADD CHECK (execution_state IN ('READY', 'SUBMITTED', 'APPLIED', 'REJECTED', 'RETRY_LIMIT')),
-                        ADD CHECK ((execution_state = 'SUBMITTED') = (attempt_id IS NOT NULL)),
-                        ADD CHECK ((attempt_id IS NULL) = (authorized_at IS NULL)),
-                        ADD CHECK ((claim_token IS NULL) = (claim_until IS NULL))
-                    """);
-            statement.execute("""
-                    CREATE INDEX fanout_job_ready ON fanout_job
-                        (execution_state DESC, available_at, firm_id, publication_id, engagement_id, engagement_revision)
-                    WHERE execution_state IN ('READY', 'SUBMITTED')
-                    """);
-            statement.execute("""
-                    CREATE UNIQUE INDEX fanout_job_reservations ON fanout_job (attempt_id)
-                    WHERE attempt_id IS NOT NULL
-                    """);
-        }
-    }
-
-    private static void initializeFirmRotation(Connection connection) throws SQLException {
-        try (var statement = connection.createStatement()) {
-            statement.execute("""
-                    ALTER TABLE fanout_capacity
-                        ADD COLUMN IF NOT EXISTS last_firm_id TEXT NOT NULL DEFAULT ''
-                    """);
-            statement.execute("""
-                    CREATE INDEX IF NOT EXISTS fanout_job_ready_by_firm ON fanout_job
-                        (firm_id, available_at, publication_id, engagement_id, engagement_revision)
-                    WHERE execution_state = 'READY'
-                    """);
-        }
     }
 
     @Override
