@@ -31,6 +31,20 @@ class PublicationFanoutTest {
     }
 
     @Test
+    void stopsAnUnsafeLegacyResumeWithoutPinnedSnapshot() {
+        var publication = new Publication("firm-a", "publication-a");
+        var source = mock(EngagementSource.class);
+        var store = mock(FanoutStore.class);
+        org.mockito.Mockito.when(store.checkpoint(publication))
+                .thenReturn(new FanoutStore.Checkpoint(1, "cursor-2", false, null));
+
+        assertThatThrownBy(() -> new PublicationFanout(source, store, 2).plan(publication))
+                .isInstanceOf(EngagementSource.SnapshotUnavailableException.class)
+                .hasMessage("Cannot resume a checkpoint without a pinned engagement snapshot");
+        verifyNoInteractions(source);
+    }
+
+    @Test
     void rejectsInvalidPageSizeBeforeAccessingTheSourceOrStore() {
         var source = mock(EngagementSource.class);
         var store = mock(FanoutStore.class);
