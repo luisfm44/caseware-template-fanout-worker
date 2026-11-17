@@ -228,6 +228,22 @@ class PostgresJobQueueIT {
     }
 
     @Test
+    void refusesToBaselineUntrackedLegacySchemaOrDeleteItsData() throws SQLException {
+        execute("CREATE TABLE existing_audit_data (id INTEGER PRIMARY KEY)");
+        execute("INSERT INTO existing_audit_data (id) VALUES (42)");
+
+        assertThatThrownBy(() -> new PostgresFanoutStore(database))
+                .isInstanceOf(RuntimeException.class);
+
+        try (var connection = database.getConnection();
+                var statement = connection.createStatement();
+                var rows = statement.executeQuery("SELECT id FROM existing_audit_data")) {
+            assertThat(rows.next()).isTrue();
+            assertThat(rows.getInt(1)).isEqualTo(42);
+        }
+    }
+
+    @Test
     void reportsTheOriginalFailureIfRollbackAlsoFails() throws SQLException {
         var connection = mock(Connection.class);
         var source = mock(DataSource.class);
