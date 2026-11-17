@@ -316,7 +316,7 @@ class PublicationFanoutIT {
                 connection.rollback();
                 return null;
             }).when(interruptedConnection).rollback();
-            when(interruptedDataSource.getConnection()).thenReturn(dataSource.getConnection(), interruptedConnection);
+            when(interruptedDataSource.getConnection()).thenReturn(interruptedConnection);
             try (var migrations = mockStatic(io.github.luisfm44.caseware.worker.adapter.postgres.FlywaySchema.class)) {
                 var store = new PostgresFanoutStore(interruptedDataSource);
 
