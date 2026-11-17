@@ -199,9 +199,7 @@ class PostgresJobQueueIT {
         seed(FIRST, SECOND);
         var original = new PostgresJobQueue(database, 1, LEASE);
         var claim = original.claimReady().orElseThrow();
-        execute("DROP INDEX fanout_job_ready_by_firm");
-        execute("ALTER TABLE fanout_capacity DROP COLUMN last_firm_id");
-
+        // Reopening a repository must not rewrite schema objects or lose an in-flight attempt.
         var upgraded = new PostgresJobQueue(database, 1, LEASE);
         assertThat(upgraded.claimReady()).isEmpty();
         expireFirstClaim();
@@ -239,9 +237,11 @@ class PostgresJobQueueIT {
         when(connection.createStatement()).thenThrow(writeFailure);
         doThrow(rollbackFailure).when(connection).rollback();
 
-        assertThatThrownBy(() -> new PostgresJobQueue(source, 1, LEASE))
-                .hasCause(writeFailure);
-        assertThat(writeFailure.getSuppressed()).containsExactly(rollbackFailure);
+        try (var migrations = org.mockito.Mockito.mockStatic(FlywaySchema.class)) {
+            assertThatThrownBy(() -> new PostgresJobQueue(source, 1, LEASE))
+                    .hasCause(writeFailure);
+            assertThat(writeFailure.getSuppressed()).containsExactly(rollbackFailure);
+        }
     }
 
     private void seed(OperationId... jobs) {
