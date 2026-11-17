@@ -231,10 +231,10 @@ class PostgresJobQueueIT {
     void reportsTheOriginalFailureIfRollbackAlsoFails() throws SQLException {
         var connection = mock(Connection.class);
         var source = mock(DataSource.class);
-        var writeFailure = new SQLException("could not prepare schema");
+        var writeFailure = new SQLException("could not reserve capacity");
         var rollbackFailure = new SQLException("lost database connection");
         when(source.getConnection()).thenReturn(connection);
-        when(connection.createStatement()).thenThrow(writeFailure);
+        when(connection.prepareStatement(org.mockito.ArgumentMatchers.anyString())).thenThrow(writeFailure);
         doThrow(rollbackFailure).when(connection).rollback();
 
         try (var migrations = org.mockito.Mockito.mockStatic(FlywaySchema.class)) {
